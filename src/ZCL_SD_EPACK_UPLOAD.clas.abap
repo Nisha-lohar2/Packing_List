@@ -1,56 +1,38 @@
-"! <p class="shorttext synchronized">Export Packing List - Excel upload</p>
+"! <p class="shorttext synchronized">Export Packing List - Excel parser</p>
 "!
 "! WRICEF 102-B "Export consolidated packing list".
 "!
-"! FS 1 / 2.1: "Any information that is not available in SAP should be
-"! maintained by users through an Excel upload into a custom Z-table."
-"! The FS does not specify the upload itself (clarification CL-11);
-"! this class implements ASSUMPTIONS A09, A10, A19 and A21-A23.
+"! Reads the FS template "Z table Format1.xlsx" (sheet 1, unchanged layout)
+"! and splits it into PACKING LISTS. No database access - all SAP checks
+"! are done in bulk by ZCL_SD_EPACK_DATA afterwards.
 "!
-"! FILE LAYOUT = the FS template "Z table Format1.xlsx", sheet 1, unchanged:
-"!   row 1        column headings (checked loosely)
-"!   rows 2..n    one row per line item - columns A-K
-"!                header data (L-AK) may be entered in any row, normally
-"!                the first; a value repeated in later rows must be equal
-"!   column L     SAP invoice number(s): one per row and/or several in one
-"!                cell separated by , ; & / or blanks
-"!   column AL    NEW, optional: Package Type ("Loose Pipes", "Boxes",
-"!                "Bundles") - entered once per run of lines
-"!   rows without Sl.No. (column A) are not line items - e.g. the total
-"!   row of the template - and are ignored.
-"!   Merged cells (Article No., Articles, Gross/Net Wt.) are supported:
-"!   see ZCL_SD_EPACK_RULES, "PACKAGE GROUPS".
+"! FILE LAYOUT (columns as in the FS template, A = 1)
+"!   row 1       column headings (checked loosely)
+"!   A-K         line item: Sl.No., Sr.No. INV, Article No., STD, Articles,
+"!               Part No., Product Description, Quantity, Gross/Net Wt., H.S Code
+"!   L           SAP Invoice Number - one per row and/or several per cell
+"!   M           Packing list no
+"!   N-AK        header data of the packing list (logic sheet "Pass
+"!               ZSD_PACKNO get ...")
+"!   AL          optional Package Type (not in the FS template, see A09)
+"!
+"! SEVERAL PACKING LISTS PER FILE (ASSUMPTION A33)
+"!   A row with "Packing list no" filled starts / continues that packing
+"!   list; rows with the column empty belong to the packing list of the
+"!   nearest row above. Each packing list gets its own header, invoices,
+"!   items and messages - nothing is shared between packing lists.
+"!
+"! INVOICE NUMBERS
+"!   All invoice numbers of the rows of a packing list belong to that
+"!   packing list (FS: "Input will be tax invoices (multiple tax invoices)");
+"!   repeated numbers are counted once. An invoice that appears under two
+"!   packing lists of the same file is an error for both (A01).
 CLASS zcl_sd_epack_upload DEFINITION
   PUBLIC
   FINAL
   CREATE PUBLIC.
 
   PUBLIC SECTION.
-
-    "! @parameter iv_mode | ZIF_SD_EPACK=>GC_UPLOAD_MODE-CREATE / -OVERWRITE
-    "! @parameter iv_test | Check only, do not save
-    METHODS constructor
-      IMPORTING iv_mode TYPE char1
-                iv_test TYPE abap_bool DEFAULT abap_true.
-
-    "! Read a file from the presentation server and process it
-    METHODS upload_file
-      IMPORTING iv_path            TYPE string
-      RETURNING VALUE(rt_messages) TYPE bapiret2_t.
-
-    "! Process file content (entry point independent of SAP GUI)
-    METHODS process
-      IMPORTING iv_xstring         TYPE xstring
-                iv_filename        TYPE string
-      RETURNING VALUE(rt_messages) TYPE bapiret2_t.
-
-    "! Delete a packing list completely
-    CLASS-METHODS delete
-      IMPORTING iv_packno          TYPE zsd_packno
-                iv_test            TYPE abap_bool DEFAULT abap_true
-      RETURNING VALUE(rt_messages) TYPE bapiret2_t.
-
-  PRIVATE SECTION.
 
     TYPES tt_cells TYPE STANDARD TABLE OF string WITH EMPTY KEY.
     TYPES:
@@ -59,6 +41,32 @@ CLASS zcl_sd_epack_upload DEFINITION
         cells TYPE tt_cells,
       END OF ty_row,
       tt_rows TYPE STANDARD TABLE OF ty_row WITH EMPTY KEY.
+
+    "! Read a file from the presentation server
+    "! @raising zcx_sd_epack | file not readable
+    CLASS-METHODS read_file
+      IMPORTING iv_path           TYPE string
+      RETURNING VALUE(rv_xstring) TYPE xstring
+      RAISING   zcx_sd_epack.
+
+    "! Excel content -> packing lists
+    "! @parameter et_messages | file-level messages (structure, rows
+    "!                          without packing list number)
+    METHODS parse
+      IMPORTING iv_xstring       TYPE xstring
+                iv_filename      TYPE string
+      EXPORTING et_packing_lists TYPE zif_sd_epack=>tt_packing_list
+                et_messages      TYPE bapiret2_t.
+
+    "! Worksheet rows (row 1 = headings) -> packing lists.
+    "! Public for ABAP Unit.
+    METHODS parse_rows
+      IMPORTING it_rows          TYPE tt_rows
+                iv_filename      TYPE string OPTIONAL
+      EXPORTING et_packing_lists TYPE zif_sd_epack=>tt_packing_list
+                et_messages      TYPE bapiret2_t.
+
+  PRIVATE SECTION.
 
     "! Header column -> field of ZSD_EPACK_HDR
     TYPES:
@@ -72,6 +80,13 @@ CLASS zcl_sd_epack_upload DEFINITION
         label  TYPE string,
       END OF ty_map,
       tt_map TYPE STANDARD TABLE OF ty_map WITH EMPTY KEY.
+
+    TYPES:
+      BEGIN OF ty_pl_rows,
+        packno TYPE zsd_packno,
+        rows   TYPE tt_rows,
+      END OF ty_pl_rows,
+      tt_pl_rows TYPE STANDARD TABLE OF ty_pl_rows WITH EMPTY KEY.
 
     "! Column numbers of the FS template (A = 1)
     CONSTANTS:
@@ -92,14 +107,8 @@ CLASS zcl_sd_epack_upload DEFINITION
         pkg_type TYPE i VALUE 38,
       END OF gc_col.
 
-    DATA mv_mode     TYPE char1.
-    DATA mv_test     TYPE abap_bool.
-    DATA mt_messages TYPE bapiret2_t.
-    DATA ms_header   TYPE zsd_epack_hdr.
-    DATA mt_invoices TYPE zif_sd_epack=>tt_vbeln.
-    DATA mt_lines    TYPE zif_sd_epack=>tt_upload_line.
-    DATA mt_items    TYPE zif_sd_epack=>tt_item.
-    DATA mv_bukrs    TYPE bukrs.
+    "! Messages go to the file or to the packing list being processed
+    DATA mr_messages TYPE REF TO bapiret2_t.
 
     METHODS add
       IMPORTING iv_type TYPE bapi_mtype DEFAULT 'E'
@@ -118,15 +127,18 @@ CLASS zcl_sd_epack_upload DEFINITION
     METHODS check_template
       IMPORTING is_row TYPE ty_row.
 
+    "! Split rows by packing list number (carry-forward of column M)
+    METHODS split_by_packing_list
+      IMPORTING it_rows        TYPE tt_rows
+      RETURNING VALUE(rt_pl)   TYPE tt_pl_rows.
+
     METHODS map_header
-      IMPORTING it_rows TYPE tt_rows.
+      IMPORTING it_rows TYPE tt_rows
+      CHANGING  cs_pl   TYPE zif_sd_epack=>ts_packing_list.
 
     METHODS map_lines
-      IMPORTING it_rows TYPE tt_rows.
-
-    METHODS validate.
-
-    METHODS save.
+      IMPORTING it_rows TYPE tt_rows
+      CHANGING  cs_pl   TYPE zif_sd_epack=>ts_packing_list.
 
     METHODS cell
       IMPORTING is_row         TYPE ty_row
@@ -140,10 +152,10 @@ CLASS zcl_sd_epack_upload DEFINITION
       RETURNING VALUE(rv_value) TYPE decfloat34.
 
     METHODS check_length
-      IMPORTING iv_row   TYPE i
-                iv_col   TYPE i
-                iv_text  TYPE string
-                iv_max   TYPE i.
+      IMPORTING iv_row  TYPE i
+                iv_col  TYPE i
+                iv_text TYPE string
+                iv_max  TYPE i.
 
     CLASS-METHODS header_map
       RETURNING VALUE(rt_map) TYPE tt_map.
@@ -152,25 +164,12 @@ CLASS zcl_sd_epack_upload DEFINITION
       IMPORTING iv_col         TYPE i
       RETURNING VALUE(rv_name) TYPE string.
 
-    CLASS-METHODS lock
-      IMPORTING iv_packno         TYPE zsd_packno
-      RETURNING VALUE(rs_message) TYPE bapiret2.
-
-    CLASS-METHODS unlock
-      IMPORTING iv_packno TYPE zsd_packno.
-
 ENDCLASS.
 
 
 CLASS zcl_sd_epack_upload IMPLEMENTATION.
 
-  METHOD constructor.
-    mv_mode = iv_mode.
-    mv_test = iv_test.
-  ENDMETHOD.
-
-
-  METHOD upload_file.
+  METHOD read_file.
 
     DATA lt_solix  TYPE solix_tab.
     DATA lv_length TYPE i.
@@ -182,102 +181,116 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
       CHANGING   data_tab   = lt_solix
       EXCEPTIONS OTHERS     = 1 ).
     IF sy-subrc <> 0.
-      rt_messages = VALUE #( ( zcl_sd_epack_rules=>msg( iv_type = 'E' iv_no = '015'
-                                                        iv_v1 = iv_path iv_v2 = 'GUI_UPLOAD' ) ) ).
-      RETURN.
+      zcx_sd_epack=>raise( iv_msgno = '015' iv_v1 = iv_path iv_v2 = 'GUI_UPLOAD' ).
     ENDIF.
 
-    rt_messages = process( iv_xstring  = cl_bcs_convert=>solix_to_xstring( it_solix = lt_solix
-                                                                           iv_size  = lv_length )
-                           iv_filename = iv_path ).
+    IF lv_length = 0.
+      zcx_sd_epack=>raise( iv_msgno = '036' ).
+    ENDIF.
+
+    rv_xstring = cl_bcs_convert=>solix_to_xstring( it_solix = lt_solix
+                                                   iv_size  = lv_length ).
 
   ENDMETHOD.
 
 
-  METHOD process.
+  METHOD parse.
 
-    CLEAR: mt_messages, ms_header, mt_invoices, mt_lines, mt_items, mv_bukrs.
+    CLEAR: et_packing_lists, et_messages.
 
     TRY.
         DATA(lt_rows) = read_worksheet( iv_xstring  = iv_xstring
                                         iv_filename = iv_filename ).
       CATCH zcx_sd_epack INTO DATA(lx_error).
-        rt_messages = VALUE #( ( zcl_sd_epack_rules=>msg( iv_type = 'E' iv_no = '015'
+        et_messages = VALUE #( ( zcl_sd_epack_rules=>msg( iv_type = 'E' iv_no = '015'
                                                           iv_v1 = iv_filename
                                                           iv_v2 = lx_error->get_text( ) ) ) ).
         RETURN.
     ENDTRY.
 
-    IF lt_rows IS INITIAL.
-      add( iv_no = '036' ).
-      rt_messages = mt_messages.
-      RETURN.
-    ENDIF.
-
-    check_template( lt_rows[ 1 ] ).
-    IF zcl_sd_epack_rules=>has_errors( mt_messages ).
-      rt_messages = mt_messages.
-      RETURN.
-    ENDIF.
-    DELETE lt_rows INDEX 1.
-
-    map_header( lt_rows ).
-    map_lines( lt_rows ).
-    ms_header-zsd_filename = iv_filename.
-
-    validate( ).
-
-    IF zcl_sd_epack_rules=>has_errors( mt_messages ).
-      add( iv_no = '035' ).
-    ELSEIF mv_test = abap_true.
-      add( iv_type = 'S' iv_no = '033' iv_v1 = lines( mt_items ) iv_v2 = lines( mt_invoices ) ).
-    ELSE.
-      save( ).
-    ENDIF.
-
-    rt_messages = mt_messages.
+    parse_rows( EXPORTING it_rows          = lt_rows
+                          iv_filename      = iv_filename
+                IMPORTING et_packing_lists = et_packing_lists
+                          et_messages      = et_messages ).
 
   ENDMETHOD.
 
 
-  METHOD delete.
+  METHOD parse_rows.
 
-    SELECT SINGLE zsd_packno, zsd_bukrs FROM zsd_epack_hdr
-      WHERE zsd_packno = @iv_packno
-      INTO @DATA(ls_hdr).
-    IF sy-subrc <> 0.
-      rt_messages = VALUE #( ( zcl_sd_epack_rules=>msg( iv_type = 'E' iv_no = '007' iv_v1 = iv_packno ) ) ).
+    DATA lt_file_msg TYPE bapiret2_t.
+
+    CLEAR: et_packing_lists, et_messages.
+    mr_messages = REF #( lt_file_msg ).
+
+    IF lines( it_rows ) < 2.
+      add( iv_no = '036' ).
+      et_messages = lt_file_msg.
       RETURN.
     ENDIF.
 
-    AUTHORITY-CHECK OBJECT zif_sd_epack=>gc_auth_object
-      ID 'ACTVT' FIELD zif_sd_epack=>gc_actvt-delete
-      ID 'BUKRS' FIELD ls_hdr-zsd_bukrs.
-    IF sy-subrc <> 0.
-      rt_messages = VALUE #( ( zcl_sd_epack_rules=>msg( iv_type = 'E' iv_no = '012'
-                                                        iv_v1 = 'Company code' iv_v2 = ls_hdr-zsd_bukrs
-                                                        iv_v3 = zif_sd_epack=>gc_actvt-delete ) ) ).
+    check_template( it_rows[ 1 ] ).
+    IF zcl_sd_epack_rules=>has_errors( lt_file_msg ).
+      et_messages = lt_file_msg.
       RETURN.
     ENDIF.
 
-    IF iv_test = abap_true.
-      rt_messages = VALUE #( ( zcl_sd_epack_rules=>msg( iv_type = 'S' iv_no = '051' iv_v1 = iv_packno ) ) ).
+    DATA(lt_data_rows) = it_rows.
+    DELETE lt_data_rows INDEX 1.
+
+    DATA(lt_split) = split_by_packing_list( lt_data_rows ).
+    IF lt_split IS INITIAL.
+      add( iv_no = '059' ).
+      et_messages = lt_file_msg.
       RETURN.
     ENDIF.
 
-    DATA(ls_lock) = lock( iv_packno ).
-    IF ls_lock IS NOT INITIAL.
-      rt_messages = VALUE #( ( ls_lock ) ).
-      RETURN.
-    ENDIF.
+    " --- One packing list at a time: header, invoices, items, checks -----
+    LOOP AT lt_split INTO DATA(ls_split).
 
-    DELETE FROM zsd_epack_data WHERE zsd_packno = @iv_packno.
-    DELETE FROM zsd_epack_inv  WHERE zsd_packno = @iv_packno.
-    DELETE FROM zsd_epack_hdr  WHERE zsd_packno = @iv_packno.
-    COMMIT WORK AND WAIT.
+      DATA(ls_pl) = VALUE zif_sd_epack=>ts_packing_list( packno = ls_split-packno ).
+      ls_pl-header-zsd_packno   = ls_split-packno.
+      ls_pl-header-zsd_filename = iv_filename.
+      ls_pl-rows = |{ ls_split-rows[ 1 ]-row }-{ ls_split-rows[ lines( ls_split-rows ) ]-row }|.
 
-    unlock( iv_packno ).
-    rt_messages = VALUE #( ( zcl_sd_epack_rules=>msg( iv_type = 'S' iv_no = '034' iv_v1 = iv_packno ) ) ).
+      mr_messages = REF #( ls_pl-messages ).
+
+      map_header( EXPORTING it_rows = ls_split-rows CHANGING cs_pl = ls_pl ).
+      map_lines(  EXPORTING it_rows = ls_split-rows CHANGING cs_pl = ls_pl ).
+
+      " FS 2.1 weight rule and the quantity plausibility per packing list
+      APPEND LINES OF zcl_sd_epack_rules=>check_weights( ls_pl-items )    TO ls_pl-messages.
+      APPEND LINES OF zcl_sd_epack_rules=>check_quantities( ls_pl-items ) TO ls_pl-messages.
+
+      INSERT ls_pl INTO TABLE et_packing_lists.
+    ENDLOOP.
+
+    " --- Cross-check: one invoice may not appear in two packing lists ------
+    TYPES: BEGIN OF ty_inv_pl,
+             vbeln  TYPE vbeln_vf,
+             packno TYPE zsd_packno,
+           END OF ty_inv_pl.
+    DATA lt_inv_pl TYPE SORTED TABLE OF ty_inv_pl WITH NON-UNIQUE KEY vbeln.
+
+    LOOP AT et_packing_lists INTO ls_pl.
+      LOOP AT ls_pl-invoices INTO DATA(lv_vbeln).
+        INSERT VALUE #( vbeln = lv_vbeln packno = ls_pl-packno ) INTO TABLE lt_inv_pl.
+      ENDLOOP.
+    ENDLOOP.
+
+    LOOP AT lt_inv_pl INTO DATA(ls_inv_pl).
+      LOOP AT lt_inv_pl INTO DATA(ls_other)
+           WHERE vbeln = ls_inv_pl-vbeln AND packno <> ls_inv_pl-packno.
+        ASSIGN et_packing_lists[ packno = ls_inv_pl-packno ] TO FIELD-SYMBOL(<ls_pl>).
+        IF sy-subrc = 0.
+          APPEND zcl_sd_epack_rules=>msg( iv_type = 'E' iv_no = '058'
+                                          iv_v1 = |{ ls_inv_pl-vbeln ALPHA = OUT }|
+                                          iv_v2 = ls_other-packno ) TO <ls_pl>-messages.
+        ENDIF.
+      ENDLOOP.
+    ENDLOOP.
+
+    et_messages = lt_file_msg.
 
   ENDMETHOD.
 
@@ -285,7 +298,7 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
   METHOD add.
     APPEND zcl_sd_epack_rules=>msg( iv_type = iv_type iv_no = iv_no
                                     iv_v1 = iv_v1 iv_v2 = iv_v2
-                                    iv_v3 = iv_v3 iv_v4 = iv_v4 ) TO mt_messages.
+                                    iv_v3 = iv_v3 iv_v4 = iv_v4 ) TO mr_messages->*.
   ENDMETHOD.
 
 
@@ -293,9 +306,9 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
 
     FIELD-SYMBOLS <lt_sheet> TYPE STANDARD TABLE.
 
-    " CL_FDT_XL_SPREADSHEET reads .xlsx without SAP GUI / OLE.
-    " ⚠ SAP-VERIFY: not a released API; on newer S/4HANA releases
-    "   XCO_CP_XLSX is the released alternative (ASSUMPTION A21).
+    " CL_FDT_XL_SPREADSHEET reads .xlsx in the application server memory
+    " (no SAP GUI / OLE automation). ⚠ SAP-VERIFY: not a released API; on
+    " newer S/4HANA releases XCO_CP_XLSX is the released alternative (A21).
     TRY.
         DATA(lo_excel) = NEW cl_fdt_xl_spreadsheet( document_name = iv_filename
                                                     xdocument     = iv_xstring ).
@@ -336,7 +349,7 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
   METHOD check_template.
 
     " Loose check: column A must be "Sl.No." and column M "Packing list no"
-    " - catches files in a wrong / shifted layout.
+    " - catches files in a wrong or shifted layout.
     DATA(lv_a) = to_upper( cell( is_row = is_row iv_col = gc_col-sn ) ).
     DATA(lv_m) = to_upper( cell( is_row = is_row iv_col = gc_col-packno ) ).
 
@@ -350,6 +363,36 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
   ENDMETHOD.
 
 
+  METHOD split_by_packing_list.
+
+    DATA lv_current TYPE zsd_packno.
+
+    LOOP AT it_rows INTO DATA(ls_row).
+
+      DATA(lv_packno) = cell( is_row = ls_row iv_col = gc_col-packno ).
+      IF lv_packno IS NOT INITIAL.
+        IF strlen( lv_packno ) > 10.
+          add( iv_no = '022' iv_v1 = ls_row-row iv_v2 = 'M' iv_v3 = 10 ).
+          CONTINUE.
+        ENDIF.
+        lv_current = |{ lv_packno ALPHA = IN WIDTH = 10 }|.
+      ELSEIF lv_current IS INITIAL.
+        " Data above the first packing list number cannot be assigned
+        add( iv_no = '055' iv_v1 = ls_row-row ).
+        CONTINUE.
+      ENDIF.
+
+      ASSIGN rt_pl[ packno = lv_current ] TO FIELD-SYMBOL(<ls_pl>).
+      IF sy-subrc <> 0.
+        APPEND VALUE #( packno = lv_current ) TO rt_pl ASSIGNING <ls_pl>.
+      ENDIF.
+      APPEND ls_row TO <ls_pl>-rows.
+
+    ENDLOOP.
+
+  ENDMETHOD.
+
+
   METHOD map_header.
 
     TYPES: BEGIN OF ty_first,
@@ -357,21 +400,24 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
              row   TYPE i,
              value TYPE string,
            END OF ty_first.
-    DATA lt_first TYPE SORTED TABLE OF ty_first WITH UNIQUE KEY col.
-    DATA lv_date  TYPE d.
-    DATA lv_num   TYPE decfloat34.
+    DATA lt_first      TYPE SORTED TABLE OF ty_first WITH UNIQUE KEY col.
+    DATA lv_date       TYPE d.
+    DATA lv_num        TYPE decfloat34.
+    DATA lv_inv_found  TYPE i.
 
     DATA(lt_map) = header_map( ).
 
     LOOP AT it_rows INTO DATA(ls_row).
 
-      " Invoices: every row may carry one or more numbers
+      " Invoices: every row of the packing list may carry one or more
       DATA(lv_inv) = cell( is_row = ls_row iv_col = gc_col-invoice ).
       IF lv_inv IS NOT INITIAL.
         zcl_sd_epack_rules=>split_invoices( EXPORTING iv_text    = lv_inv
                                             IMPORTING et_vbeln   = DATA(lt_vbeln)
                                                       et_invalid = DATA(lt_invalid) ).
-        INSERT LINES OF lt_vbeln INTO TABLE mt_invoices.
+        lv_inv_found += lines( lt_vbeln ).
+        " Sorted unique table - a repeated invoice is kept once
+        INSERT LINES OF lt_vbeln INTO TABLE cs_pl-invoices.
         LOOP AT lt_invalid INTO DATA(lv_invalid).
           add( iv_no = '018' iv_v1 = ls_row-row iv_v2 = lv_invalid iv_v3 = 'L' ).
         ENDLOOP.
@@ -383,7 +429,7 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
           CONTINUE.
         ENDIF.
 
-        " Same value in several rows is fine, a different one is not
+        " The same value in several rows is fine, a different one is not
         READ TABLE lt_first INTO DATA(ls_first) WITH TABLE KEY col = ls_map-col.
         IF sy-subrc = 0.
           IF ls_first-value <> lv_value.
@@ -393,8 +439,10 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
         ENDIF.
         INSERT VALUE #( col = ls_map-col row = ls_row-row value = lv_value ) INTO TABLE lt_first.
 
-        ASSIGN COMPONENT ls_map-field OF STRUCTURE ms_header TO FIELD-SYMBOL(<lv_field>).
-        CHECK sy-subrc = 0.
+        ASSIGN COMPONENT ls_map-field OF STRUCTURE cs_pl-header TO FIELD-SYMBOL(<lv_field>).
+        IF sy-subrc <> 0.
+          CONTINUE.
+        ENDIF.
 
         CASE ls_map-kind.
           WHEN 'D'.
@@ -412,7 +460,7 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
               add( iv_no = '018' iv_v1 = ls_row-row iv_v2 = lv_value iv_v3 = column_name( ls_map-col ) ).
             ENDIF.
           WHEN OTHERS.
-            " Keep Alt+Enter line breaks of multi-line cells (kind T)
+            " Multi-line cells (Alt+Enter) keep their line breaks (kind T)
             check_length( iv_row = ls_row-row iv_col = ls_map-col iv_text = lv_value iv_max = ls_map-maxlen ).
             <lv_field> = lv_value.
         ENDCASE.
@@ -420,23 +468,24 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
 
     ENDLOOP.
 
-    ms_header-zsd_packno = |{ ms_header-zsd_packno ALPHA = IN }|.
-
-    IF ms_header-zsd_packno IS INITIAL.
-      add( iv_no = '017' iv_v1 = 2 iv_v2 = 'Packing list no' ).
-    ENDIF.
-    IF ms_header-zsd_packdt IS INITIAL.
-      add( iv_no = '017' iv_v1 = 2 iv_v2 = 'Packing list date' ).
-    ENDIF.
-    IF mt_invoices IS INITIAL.
-      add( iv_no = '017' iv_v1 = 2 iv_v2 = 'SAP Invoice Number' ).
+    DATA(lv_repeated) = lv_inv_found - lines( cs_pl-invoices ).
+    IF lv_repeated > 0.
+      add( iv_type = 'I' iv_no = '056' iv_v1 = lv_repeated ).
     ENDIF.
 
-    " Notify parties must be filled from 1 upwards - the form prints
-    " "1ST NOTIFY PARTY" ... (ASSUMPTION A10)
+    " Mandatory per packing list
+    DATA(lv_first_row) = it_rows[ 1 ]-row.
+    IF cs_pl-header-zsd_packdt IS INITIAL.
+      add( iv_no = '017' iv_v1 = lv_first_row iv_v2 = 'Packing list date' ).
+    ENDIF.
+    IF cs_pl-invoices IS INITIAL.
+      add( iv_no = '017' iv_v1 = lv_first_row iv_v2 = 'SAP Invoice Number' ).
+    ENDIF.
+
+    " Notify parties must be filled from 1 upwards (A10)
     DATA lv_gap TYPE i.
     DO zif_sd_epack=>gc_max_np TIMES.
-      ASSIGN COMPONENT |ZSD_NP{ sy-index }| OF STRUCTURE ms_header TO FIELD-SYMBOL(<lv_np>).
+      ASSIGN COMPONENT |ZSD_NP{ sy-index }| OF STRUCTURE cs_pl-header TO FIELD-SYMBOL(<lv_np>).
       IF <lv_np> IS INITIAL.
         IF lv_gap IS INITIAL.
           lv_gap = sy-index.
@@ -451,12 +500,13 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
 
   METHOD map_lines.
 
+    DATA lt_lines   TYPE zif_sd_epack=>tt_upload_line.
     DATA lv_ignored TYPE i.
 
     LOOP AT it_rows INTO DATA(ls_row).
 
-      " A line item needs a Sl.No.; other rows (total row of the
-      " template, header-only rows) are skipped
+      " A line item needs a Sl.No.; other rows (total row of the template,
+      " header-only rows) are not line items
       IF cell( is_row = ls_row iv_col = gc_col-sn ) IS INITIAL.
         IF cell( is_row = ls_row iv_col = gc_col-partno ) IS NOT INITIAL
            OR cell( is_row = ls_row iv_col = gc_col-qty ) IS NOT INITIAL.
@@ -470,12 +520,12 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
       ls_line-sn     = number( is_row = ls_row iv_col = gc_col-sn     iv_integer = abap_true ).
       ls_line-inv_sn = number( is_row = ls_row iv_col = gc_col-inv_sn iv_integer = abap_true ).
       ls_line-std    = number( is_row = ls_row iv_col = gc_col-std    iv_integer = abap_true ).
-      ls_line-art    = number( is_row = ls_row iv_col = gc_col-art iv_integer = abap_true ).
+      ls_line-art    = number( is_row = ls_row iv_col = gc_col-art    iv_integer = abap_true ).
       ls_line-qty    = round( val = number( is_row = ls_row iv_col = gc_col-qty ) dec = 3 ).
       ls_line-gwt    = round( val = number( is_row = ls_row iv_col = gc_col-gwt ) dec = 3 ).
       ls_line-nwt    = round( val = number( is_row = ls_row iv_col = gc_col-nwt ) dec = 3 ).
 
-      " Empty cell = merged cell (part of the group above), see A06
+      " Empty cell = merged cell, i.e. part of the group above (A06)
       ls_line-art_filled = xsdbool( cell( is_row = ls_row iv_col = gc_col-art ) IS NOT INITIAL ).
       ls_line-gwt_filled = xsdbool( cell( is_row = ls_row iv_col = gc_col-gwt ) IS NOT INITIAL ).
       ls_line-nwt_filled = xsdbool( cell( is_row = ls_row iv_col = gc_col-nwt ) IS NOT INITIAL ).
@@ -505,186 +555,38 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
         add( iv_no = '017' iv_v1 = ls_row-row iv_v2 = 'Quantity' ).
       ENDIF.
 
-      APPEND ls_line TO mt_lines.
+      " Exact duplicate of an earlier row (same Sl.No. and same content):
+      " counted once (A38). Same Sl.No. with different content is an
+      " error raised by BUILD_ITEMS.
+      LOOP AT lt_lines INTO DATA(ls_prev) WHERE sn = ls_line-sn.
+        DATA(ls_cmp) = ls_line.
+        ls_cmp-row = ls_prev-row.
+        IF ls_cmp = ls_prev.
+          add( iv_type = 'W' iv_no = '057' iv_v1 = ls_row-row iv_v2 = ls_prev-row ).
+          CLEAR ls_line.
+        ENDIF.
+        EXIT.
+      ENDLOOP.
+      IF ls_line IS INITIAL.
+        CONTINUE.
+      ENDIF.
+
+      APPEND ls_line TO lt_lines.
     ENDLOOP.
 
     IF lv_ignored > 0.
       add( iv_type = 'I' iv_no = '050' iv_v1 = lv_ignored ).
     ENDIF.
 
-    IF mt_lines IS INITIAL.
+    IF lt_lines IS INITIAL.
       add( iv_no = '036' ).
       RETURN.
     ENDIF.
 
-    zcl_sd_epack_rules=>build_items( EXPORTING iv_packno   = ms_header-zsd_packno
-                                               it_lines    = mt_lines
-                                     IMPORTING et_items    = mt_items
-                                     CHANGING  ct_messages = mt_messages ).
-
-  ENDMETHOD.
-
-
-  METHOD validate.
-
-    " --- Business rules on the line items --------------------------------
-    APPEND LINES OF zcl_sd_epack_rules=>check_weights( mt_items )    TO mt_messages.
-    APPEND LINES OF zcl_sd_epack_rules=>check_quantities( mt_items ) TO mt_messages.
-
-    IF mt_invoices IS INITIAL OR ms_header-zsd_packno IS INITIAL.
-      RETURN.
-    ENDIF.
-
-    " --- Invoices ---------------------------------------------------------
-    DATA lr_fkart TYPE RANGE OF fkart.
-
-    SELECT vbeln, fkart, fksto, sfakn, bukrs FROM vbrk
-      FOR ALL ENTRIES IN @mt_invoices
-      WHERE vbeln = @mt_invoices-table_line
-      INTO TABLE @DATA(lt_vbrk).
-    SORT lt_vbrk BY vbeln.
-
-    SELECT sign, opti AS option, low, high FROM tvarvc
-      WHERE name = @zif_sd_epack=>gc_tvarv_fkart
-        AND type = 'S'
-      INTO CORRESPONDING FIELDS OF TABLE @lr_fkart.
-    DELETE lr_fkart WHERE low IS INITIAL AND high IS INITIAL.
-
-    LOOP AT mt_invoices INTO DATA(lv_vbeln).
-      DATA(lv_ext) = |{ lv_vbeln ALPHA = OUT }|.
-      READ TABLE lt_vbrk INTO DATA(ls_vbrk) WITH KEY vbeln = lv_vbeln BINARY SEARCH.
-      IF sy-subrc <> 0.
-        add( iv_no = '008' iv_v1 = lv_ext ).
-        CONTINUE.
-      ENDIF.
-      IF ls_vbrk-fksto = abap_true OR ls_vbrk-sfakn IS NOT INITIAL.
-        add( iv_no = '009' iv_v1 = lv_ext ).
-      ENDIF.
-      IF lr_fkart IS NOT INITIAL AND ls_vbrk-fkart NOT IN lr_fkart.
-        add( iv_no = '010' iv_v1 = lv_ext iv_v2 = ls_vbrk-fkart ).
-      ENDIF.
-      IF mv_bukrs IS INITIAL.
-        mv_bukrs = ls_vbrk-bukrs.
-      ELSEIF ls_vbrk-bukrs <> mv_bukrs.
-        add( iv_no = '011' iv_v1 = 'Company code' iv_v2 = mv_bukrs iv_v3 = ls_vbrk-bukrs ).
-      ENDIF.
-    ENDLOOP.
-    ms_header-zsd_bukrs = mv_bukrs.
-
-    " One invoice belongs to one packing list (ASSUMPTION A01)
-    SELECT zsd_packno, vbeln FROM zsd_epack_inv
-      FOR ALL ENTRIES IN @mt_invoices
-      WHERE vbeln = @mt_invoices-table_line
-      INTO TABLE @DATA(lt_link).
-    LOOP AT lt_link INTO DATA(ls_link) WHERE zsd_packno <> ms_header-zsd_packno.
-      add( iv_no = '026' iv_v1 = |{ ls_link-vbeln ALPHA = OUT }| iv_v2 = ls_link-zsd_packno ).
-    ENDLOOP.
-
-    " Part No. should be a billed material (warning only, ASSUMPTION A12)
-    SELECT DISTINCT matnr FROM vbrp
-      FOR ALL ENTRIES IN @mt_invoices
-      WHERE vbeln = @mt_invoices-table_line
-      INTO TABLE @DATA(lt_matnr).
-    LOOP AT mt_items INTO DATA(ls_item).
-      DATA lv_matnr TYPE matnr.
-      CALL FUNCTION 'CONVERSION_EXIT_MATN1_INPUT'
-        EXPORTING
-          input        = ls_item-zsd_partno
-        IMPORTING
-          output       = lv_matnr
-        EXCEPTIONS
-          length_error = 1
-          OTHERS       = 2.
-      IF sy-subrc <> 0 OR NOT line_exists( lt_matnr[ matnr = lv_matnr ] ).
-        add( iv_type = 'W' iv_no = '030' iv_v1 = |{ CONV i( ls_item-zsd_sn ) }| iv_v2 = ls_item-zsd_partno ).
-      ENDIF.
-    ENDLOOP.
-
-    " --- Packing list existence vs. mode ----------------------------------
-    SELECT SINGLE zsd_revno FROM zsd_epack_hdr
-      WHERE zsd_packno = @ms_header-zsd_packno
-      INTO @DATA(lv_revno).
-    DATA(lv_exists) = xsdbool( sy-subrc = 0 ).
-
-    CASE mv_mode.
-      WHEN zif_sd_epack=>gc_upload_mode-create.
-        IF lv_exists = abap_true.
-          add( iv_no = '024' iv_v1 = ms_header-zsd_packno ).
-        ENDIF.
-      WHEN zif_sd_epack=>gc_upload_mode-overwrite.
-        IF lv_exists = abap_false.
-          add( iv_no = '025' iv_v1 = ms_header-zsd_packno ).
-        ELSE.
-          ms_header-zsd_revno = lv_revno + 1.
-        ENDIF.
-    ENDCASE.
-
-    " --- Authorization (ASSUMPTION A24) ------------------------------------
-    DATA(lv_actvt) = COND activ_auth( WHEN mv_mode = zif_sd_epack=>gc_upload_mode-create
-                                      THEN zif_sd_epack=>gc_actvt-create
-                                      ELSE zif_sd_epack=>gc_actvt-change ).
-    AUTHORITY-CHECK OBJECT zif_sd_epack=>gc_auth_object
-      ID 'ACTVT' FIELD lv_actvt
-      ID 'BUKRS' FIELD mv_bukrs.
-    IF sy-subrc <> 0.
-      add( iv_no = '012' iv_v1 = 'Company code' iv_v2 = mv_bukrs iv_v3 = lv_actvt ).
-    ENDIF.
-
-  ENDMETHOD.
-
-
-  METHOD save.
-
-    DATA(ls_lock) = lock( ms_header-zsd_packno ).
-    IF ls_lock IS NOT INITIAL.
-      APPEND ls_lock TO mt_messages.
-      RETURN.
-    ENDIF.
-
-    " Audit fields - keep the creation data on overwrite (ASSUMPTION A22)
-    SELECT SINGLE zsd_ernam, zsd_erdat, zsd_erzet FROM zsd_epack_hdr
-      WHERE zsd_packno = @ms_header-zsd_packno
-      INTO (@ms_header-zsd_ernam, @ms_header-zsd_erdat, @ms_header-zsd_erzet).
-    IF sy-subrc <> 0.
-      ms_header-zsd_ernam = sy-uname.
-      ms_header-zsd_erdat = sy-datum.
-      ms_header-zsd_erzet = sy-uzeit.
-    ELSE.
-      ms_header-zsd_aenam = sy-uname.
-      ms_header-zsd_aedat = sy-datum.
-      ms_header-zsd_aezet = sy-uzeit.
-    ENDIF.
-
-    DATA lt_inv_db TYPE STANDARD TABLE OF zsd_epack_inv WITH EMPTY KEY.
-    lt_inv_db = VALUE #( FOR lv_vbeln IN mt_invoices
-                         ( zsd_packno = ms_header-zsd_packno vbeln = lv_vbeln ) ).
-
-    DELETE FROM zsd_epack_data WHERE zsd_packno = @ms_header-zsd_packno.
-    DELETE FROM zsd_epack_inv  WHERE zsd_packno = @ms_header-zsd_packno.
-
-    MODIFY zsd_epack_hdr FROM @ms_header.
-    DATA(lv_ok) = xsdbool( sy-subrc = 0 ).
-
-    INSERT zsd_epack_inv FROM TABLE @lt_inv_db.
-    IF sy-subrc <> 0.
-      lv_ok = abap_false.
-    ENDIF.
-
-    INSERT zsd_epack_data FROM TABLE @mt_items.
-    IF sy-subrc <> 0.
-      lv_ok = abap_false.
-    ENDIF.
-
-    IF lv_ok = abap_true.
-      COMMIT WORK AND WAIT.
-      add( iv_type = 'S' iv_no = '032' iv_v1 = ms_header-zsd_packno iv_v2 = ms_header-zsd_revno
-                                       iv_v3 = lines( mt_items ) iv_v4 = lines( mt_invoices ) ).
-    ELSE.
-      ROLLBACK WORK.
-      add( iv_no = '052' iv_v1 = ms_header-zsd_packno ).
-    ENDIF.
-
-    unlock( ms_header-zsd_packno ).
+    zcl_sd_epack_rules=>build_items( EXPORTING iv_packno   = cs_pl-packno
+                                               it_lines    = lt_lines
+                                     IMPORTING et_items    = cs_pl-items
+                                     CHANGING  ct_messages = mr_messages->* ).
 
   ENDMETHOD.
 
@@ -728,12 +630,12 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
   METHOD header_map.
 
     " Column order and lengths of "Z table Format1.xlsx" / Technical detail.
-    " Lengths of multi-line fields are wider than in the FS - the sample
-    " outputs do not fit into the FS lengths (ASSUMPTION A19).
+    " Column O "Exporter ReF" is NOT mapped: Technical detail marks
+    " ZSD_EXPREF "Not Req - This data will be fetched from SAP System"
+    " (logic sheet B11). Multi-line fields are wider than in the FS because
+    " the sample outputs do not fit into the FS lengths (A19).
     rt_map = VALUE #(
-      ( col = 13 field = 'ZSD_PACKNO'    kind = 'C' maxlen = 10   label = `Packing list no` )
       ( col = 14 field = 'ZSD_PACKDT'    kind = 'D'               label = `Packing list date` )
-      ( col = 15 field = 'ZSD_EXPREF'    kind = 'C' maxlen = 20   label = `Exporter Ref` )
       ( col = 16 field = 'ZSD_PARTY_REF' kind = 'C' maxlen = 200  label = `Buyer's Reference No.` )
       ( col = 17 field = 'ZSD_REF_DT'    kind = 'D'               label = `Buyer's Reference date` )
       ( col = 18 field = 'ZSD_CNTY_ORGN' kind = 'C' maxlen = 20   label = `Country of origin` )
@@ -769,35 +671,6 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
       rv_name = |{ sy-abcde+lv_rem(1) }{ rv_name }|.
       lv_col = ( lv_col - 1 - lv_rem ) DIV 26.
     ENDWHILE.
-
-  ENDMETHOD.
-
-
-  METHOD lock.
-
-    CALL FUNCTION 'ENQUEUE_EZSD_EPACK'
-      EXPORTING
-        mode_zsd_epack_hdr = 'E'
-        mandt              = sy-mandt
-        zsd_packno         = iv_packno
-      EXCEPTIONS
-        foreign_lock       = 1
-        system_failure     = 2
-        OTHERS             = 3.
-    IF sy-subrc <> 0.
-      rs_message = zcl_sd_epack_rules=>msg( iv_type = 'E' iv_no = '014' iv_v1 = iv_packno iv_v2 = sy-msgv1 ).
-    ENDIF.
-
-  ENDMETHOD.
-
-
-  METHOD unlock.
-
-    CALL FUNCTION 'DEQUEUE_EZSD_EPACK'
-      EXPORTING
-        mode_zsd_epack_hdr = 'E'
-        mandt              = sy-mandt
-        zsd_packno         = iv_packno.
 
   ENDMETHOD.
 

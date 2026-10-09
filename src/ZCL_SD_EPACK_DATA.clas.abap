@@ -2,28 +2,32 @@
 "!
 "! WRICEF 102-B "Export consolidated packing list".
 "!
-"! Reads the packing list (Z tables) and the SAP data of its tax
-"! invoices, validates them and returns everything the Smart Form prints.
-"! The forms contain NO SELECT - they only format what this class passes.
+"! Builds the Smart Form data of MANY packing lists in one go, following
+"! the FS logic sheet (Logic_sheet1.xlsx, sheet "Logic") row by row. The
+"! row numbers (B3, B20, ...) are quoted at each derivation.
 "!
 "! PERFORMANCE CONTRACT
-"!   Every table is read once per run (array SELECT / FOR ALL ENTRIES);
-"!   there is no SELECT inside a loop. Volumes are small (samples: 77-90
-"!   lines, a handful of invoices per packing list).
+"!   READ_SAP_DATA reads every SAP table ONCE for the invoices of ALL
+"!   packing lists (FOR ALL ENTRIES on de-duplicated keys). BUILD_ONE then
+"!   works only on internal HASHED / SORTED tables. There is no SELECT
+"!   inside any loop, whatever the number of packing lists, invoices or
+"!   line items.
 "!
-"! DEVIATIONS FROM THE FS LOGIC SHEET (Logic_sheet1.xlsx) - deliberate,
-"! see docs/Packing_List_Requirement_Analysis_and_Development_Approach.md
-"! section 6.4:
-"!   B4   region text      T005S-BEZEI  -> T005U-BEZEI
-"!   B5   country text     T005-LANDX   -> T005T-LANDX
-"!   B54  material text    MARA-MAKTX   -> MAKT-MAKTX
-"!   B20/B26 partners      KNVP SP/SH   -> VBPA AG/WE of the invoice
-"!                         (the partners actually billed, not the
-"!                          customer master default)
-"!   B13  sales order      VBRK-AUBEL   -> VBRP-AUBEL (item field)
+"! ISOLATION
+"!   Every packing list is assembled only from its own invoices and its
+"!   own line items; errors of one packing list never stop the others.
 "!
-"! ⚠ SAP-VERIFY: field names of J_1BBRANCH, T001Z, T604N, TVZBT, TINCT,
-"!   ADR2/ADR3/ADR6 must be checked in the DEV system before activation.
+"! WHERE THE LOGIC SHEET NAMES A FIELD THAT DOES NOT EXIST IN THE NAMED
+"! TABLE, the table that holds the field is read instead (documented in
+"! docs/Packing_List_Report_Design.md, section 3):
+"!   B4   BEZEI  is in T005U (T005S has no texts)
+"!   B5   LANDX  is in T005T (T005 has no texts)
+"!   B54  MAKTX  is in MAKT  (MARA has no texts)
+"!   B20/B26  "PARVW = SP / SH" are the English display codes of the
+"!        internal values AG / WE; the partner number is KNVP-KUNN2
+"!   B13  AUBEL is a field of VBRP (billing item), not of VBRK
+"! ⚠ SAP-VERIFY in DEV before activation: J_1BBRANCH-GSTIN, T001Z,
+"!   T604N (key SPRAS/LAND1/STEUC, text TEXT1), TVZBT-ZTAGG, KNVP-DEFPA.
 CLASS zcl_sd_epack_data DEFINITION
   PUBLIC
   FINAL
@@ -31,31 +35,26 @@ CLASS zcl_sd_epack_data DEFINITION
 
   PUBLIC SECTION.
 
-    "! Packing list for the selection screen input.
-    "! Invoices -> link table ZSD_EPACK_INV -> exactly one packing list.
-    "! @raising zcx_sd_epack | nothing / several / incomplete selection
-    METHODS resolve_packno
-      IMPORTING it_vbeln         TYPE zif_sd_epack=>tr_vbeln
-                iv_packno        TYPE zsd_packno OPTIONAL
-      RETURNING VALUE(rv_packno) TYPE zsd_packno
-      RAISING   zcx_sd_epack.
+    TYPES tr_packno TYPE RANGE OF zsd_packno.
 
-    "! Read, validate and prepare everything for the form.
+    "! Prepare the form data of all packing lists.
     "! @parameter iv_format | ZIF_SD_EPACK=>GC_FORMAT-*
-    "! @raising zcx_sd_epack | any error - MT_MESSAGES holds the full list
-    METHODS get_print_data
-      IMPORTING iv_packno      TYPE zsd_packno
-                iv_format      TYPE char1 DEFAULT zif_sd_epack=>gc_format-auto
-      RETURNING VALUE(rs_data) TYPE zif_sd_epack=>ts_print_data
+    "! @parameter rt_result | one entry per packing list - status, messages, form data
+    METHODS prepare
+      IMPORTING it_packing_lists TYPE zif_sd_epack=>tt_packing_list
+                iv_format        TYPE char1 DEFAULT zif_sd_epack=>gc_format-auto
+      RETURNING VALUE(rt_result) TYPE zif_sd_epack=>tt_result.
+
+    "! Read saved packing lists (reprint) for invoices and/or numbers.
+    "! A packing list found through one of its invoices is returned
+    "! completely, with all its invoices and items.
+    "! @raising zcx_sd_epack | nothing selected / nothing found
+    METHODS load_saved
+      IMPORTING it_vbeln         TYPE zif_sd_epack=>tr_vbeln
+                it_packno        TYPE tr_packno
+      EXPORTING et_packing_lists TYPE zif_sd_epack=>tt_packing_list
+                et_messages      TYPE bapiret2_t
       RAISING   zcx_sd_epack.
-
-    "! Warnings of the last GET_PRINT_DATA call (do not block output)
-    METHODS get_warnings
-      RETURNING VALUE(rt_messages) TYPE bapiret2_t.
-
-    "! Record who printed the packing list and when (not for preview)
-    CLASS-METHODS mark_printed
-      IMPORTING iv_packno TYPE zsd_packno.
 
   PRIVATE SECTION.
 
@@ -67,13 +66,17 @@ CLASS zcl_sd_epack_data DEFINITION
         sfakn TYPE vbrk-sfakn,
         bukrs TYPE vbrk-bukrs,
         vkorg TYPE vbrk-vkorg,
+        vtweg TYPE vbrk-vtweg,
+        spart TYPE vbrk-spart,
         kunag TYPE vbrk-kunag,
         zterm TYPE vbrk-zterm,
         inco1 TYPE vbrk-inco1,
         inco2 TYPE vbrk-inco2,
         bupla TYPE vbrk-bupla,
       END OF ty_vbrk,
-      tt_vbrk TYPE SORTED TABLE OF ty_vbrk WITH UNIQUE KEY vbeln,
+      tt_vbrk TYPE HASHED TABLE OF ty_vbrk WITH UNIQUE KEY vbeln,
+      "! Checked invoices of ONE packing list (index access needed)
+      tt_vbrk_list TYPE SORTED TABLE OF ty_vbrk WITH UNIQUE KEY vbeln,
 
       BEGIN OF ty_vbrp,
         vbeln TYPE vbrp-vbeln,
@@ -82,61 +85,168 @@ CLASS zcl_sd_epack_data DEFINITION
         werks TYPE vbrp-werks,
         aubel TYPE vbrp-aubel,
       END OF ty_vbrp,
-      tt_vbrp TYPE STANDARD TABLE OF ty_vbrp WITH EMPTY KEY,
+      tt_vbrp TYPE SORTED TABLE OF ty_vbrp WITH UNIQUE KEY vbeln posnr,
 
-      BEGIN OF ty_partner,
-        vbeln TYPE vbpa-vbeln,
-        posnr TYPE vbpa-posnr,
-        parvw TYPE vbpa-parvw,
-        kunnr TYPE vbpa-kunnr,
-        adrnr TYPE vbpa-adrnr,
-      END OF ty_partner,
-      tt_partner TYPE STANDARD TABLE OF ty_partner WITH EMPTY KEY,
+      BEGIN OF ty_knvp,
+        kunnr TYPE knvp-kunnr,
+        vkorg TYPE knvp-vkorg,
+        vtweg TYPE knvp-vtweg,
+        spart TYPE knvp-spart,
+        parvw TYPE knvp-parvw,
+        parza TYPE knvp-parza,
+        kunn2 TYPE knvp-kunn2,
+        defpa TYPE knvp-defpa,
+      END OF ty_knvp,
+      tt_knvp TYPE SORTED TABLE OF ty_knvp
+              WITH UNIQUE KEY kunnr vkorg vtweg spart parvw parza,
 
-      BEGIN OF ty_address,
+      BEGIN OF ty_key_adrnr,
+        id    TYPE char10,
+        adrnr TYPE adrnr,
+      END OF ty_key_adrnr,
+      tt_key_adrnr TYPE HASHED TABLE OF ty_key_adrnr WITH UNIQUE KEY id,
+
+      BEGIN OF ty_adrc,
         addrnumber TYPE adrc-addrnumber,
         date_from  TYPE adrc-date_from,
         name1      TYPE adrc-name1,
-        name2      TYPE adrc-name2,
-        name_co    TYPE adrc-name_co,
         street     TYPE adrc-street,
         str_suppl1 TYPE adrc-str_suppl1,
-        str_suppl2 TYPE adrc-str_suppl2,
         city1      TYPE adrc-city1,
         city2      TYPE adrc-city2,
         post_code1 TYPE adrc-post_code1,
         region     TYPE adrc-region,
         country    TYPE adrc-country,
         building   TYPE adrc-building,
-      END OF ty_address,
-      tt_address TYPE SORTED TABLE OF ty_address WITH UNIQUE KEY addrnumber,
+      END OF ty_adrc,
+      tt_adrc TYPE HASHED TABLE OF ty_adrc WITH UNIQUE KEY addrnumber,
 
-      BEGIN OF ty_comm,
+      BEGIN OF ty_adr6,
+        addrnumber TYPE adr6-addrnumber,
+        flgdefault TYPE adr6-flgdefault,
+        consnumber TYPE adr6-consnumber,
+        smtp_addr  TYPE adr6-smtp_addr,
+      END OF ty_adr6,
+      tt_adr6 TYPE SORTED TABLE OF ty_adr6 WITH NON-UNIQUE KEY addrnumber,
+
+      BEGIN OF ty_adr2,
         addrnumber TYPE adr2-addrnumber,
-        consnumber TYPE adr2-consnumber,
-        flgdefault TYPE adr2-flgdefault,
-        kind       TYPE char1,     " T tel / M mobile / F fax / E e-mail
         r3_user    TYPE adr2-r3_user,
-        value      TYPE string,
-      END OF ty_comm,
-      tt_comm TYPE STANDARD TABLE OF ty_comm WITH EMPTY KEY,
+        flgdefault TYPE adr2-flgdefault,
+        consnumber TYPE adr2-consnumber,
+        telnr_long TYPE adr2-telnr_long,
+      END OF ty_adr2,
+      tt_adr2 TYPE SORTED TABLE OF ty_adr2 WITH NON-UNIQUE KEY addrnumber r3_user,
 
-      BEGIN OF ty_party,
+      BEGIN OF ty_t005t,
+        land1 TYPE t005t-land1,
+        landx TYPE t005t-landx,
+      END OF ty_t005t,
+      tt_t005t TYPE HASHED TABLE OF ty_t005t WITH UNIQUE KEY land1,
+
+      BEGIN OF ty_t005u,
+        land1 TYPE t005u-land1,
+        bland TYPE t005u-bland,
+        bezei TYPE t005u-bezei,
+      END OF ty_t005u,
+      tt_t005u TYPE HASHED TABLE OF ty_t005u WITH UNIQUE KEY land1 bland,
+
+      BEGIN OF ty_branch,
+        bukrs  TYPE j_1bbranch-bukrs,
+        branch TYPE j_1bbranch-branch,
+        gstin  TYPE j_1bbranch-gstin,
+      END OF ty_branch,
+      tt_branch TYPE HASHED TABLE OF ty_branch WITH UNIQUE KEY bukrs branch,
+
+      BEGIN OF ty_t001z,
+        bukrs TYPE t001z-bukrs,
+        paval TYPE t001z-paval,
+      END OF ty_t001z,
+      tt_t001z TYPE HASHED TABLE OF ty_t001z WITH UNIQUE KEY bukrs,
+
+      BEGIN OF ty_vbak,
+        vbeln TYPE vbak-vbeln,
+        vgbel TYPE vbak-vgbel,
+      END OF ty_vbak,
+      tt_vbak TYPE HASHED TABLE OF ty_vbak WITH UNIQUE KEY vbeln,
+
+      BEGIN OF ty_vbkd,
+        vbeln TYPE vbkd-vbeln,
+        bstkd TYPE vbkd-bstkd,
+        bstdk TYPE vbkd-bstdk,
+      END OF ty_vbkd,
+      tt_vbkd TYPE HASHED TABLE OF ty_vbkd WITH UNIQUE KEY vbeln,
+
+      BEGIN OF ty_tvzbt,
+        zterm TYPE tvzbt-zterm,
+        ztagg TYPE tvzbt-ztagg,
+        vtext TYPE tvzbt-vtext,
+      END OF ty_tvzbt,
+      tt_tvzbt TYPE SORTED TABLE OF ty_tvzbt WITH UNIQUE KEY zterm ztagg,
+
+      BEGIN OF ty_makt,
+        matnr TYPE makt-matnr,
+        maktx TYPE makt-maktx,
+      END OF ty_makt,
+      tt_makt TYPE HASHED TABLE OF ty_makt WITH UNIQUE KEY matnr,
+
+      BEGIN OF ty_marc,
+        matnr TYPE marc-matnr,
+        werks TYPE marc-werks,
+        steuc TYPE marc-steuc,
+      END OF ty_marc,
+      tt_marc TYPE HASHED TABLE OF ty_marc WITH UNIQUE KEY matnr werks,
+
+      BEGIN OF ty_t604n,
+        steuc TYPE t604n-steuc,
+        text1 TYPE t604n-text1,
+      END OF ty_t604n,
+      tt_t604n TYPE HASHED TABLE OF ty_t604n WITH UNIQUE KEY steuc,
+
+      BEGIN OF ty_matnr,
+        partno TYPE zsd_partno,
+        matnr  TYPE matnr,
+      END OF ty_matnr,
+      tt_matnr TYPE HASHED TABLE OF ty_matnr WITH UNIQUE KEY partno,
+
+      BEGIN OF ty_auth,
+        object TYPE xuobject,
+        value  TYPE char10,
+        ok     TYPE abap_bool,
+      END OF ty_auth,
+      tt_auth TYPE HASHED TABLE OF ty_auth WITH UNIQUE KEY object value,
+
+      "! Resolved partner (logic B20 / B26)
+      BEGIN OF ty_partner,
         kunnr TYPE kunnr,
         adrnr TYPE adrnr,
-        stcd1 TYPE stcd1,
-      END OF ty_party.
+      END OF ty_partner.
 
-    DATA ms_pl        TYPE zif_sd_epack=>ts_packing_list.
-    DATA mt_vbrk      TYPE tt_vbrk.
-    DATA mt_vbrp      TYPE tt_vbrp.
-    DATA ms_sold_to   TYPE ty_party.
-    DATA ms_ship_to   TYPE ty_party.
-    DATA mt_address   TYPE tt_address.
-    DATA mt_comm      TYPE tt_comm.
-    DATA mt_messages  TYPE bapiret2_t.
-    DATA mv_company_adrnr TYPE adrnr.
-    DATA mv_gstin         TYPE zsd_s_epack_prt_hdr-gstin.
+    " --- Buffers: filled once by READ_SAP_DATA -----------------------------
+    DATA mt_vbrk   TYPE tt_vbrk.
+    DATA mt_vbrp   TYPE tt_vbrp.
+    DATA mt_knvp   TYPE tt_knvp.
+    DATA mt_kna1   TYPE tt_key_adrnr.
+    DATA mt_t001   TYPE tt_key_adrnr.
+    DATA mt_adrc   TYPE tt_adrc.
+    DATA mt_adr6   TYPE tt_adr6.
+    DATA mt_adr2   TYPE tt_adr2.
+    DATA mt_t005t  TYPE tt_t005t.
+    DATA mt_t005u  TYPE tt_t005u.
+    DATA mt_branch TYPE tt_branch.
+    DATA mt_t001z  TYPE tt_t001z.
+    DATA mt_vbak   TYPE tt_vbak.
+    DATA mt_vbkd   TYPE tt_vbkd.
+    DATA mt_tvzbt  TYPE tt_tvzbt.
+    DATA mt_makt   TYPE tt_makt.
+    DATA mt_marc   TYPE tt_marc.
+    DATA mt_t604n  TYPE tt_t604n.
+    DATA mt_matnr  TYPE tt_matnr.
+    DATA mt_auth   TYPE tt_auth.
+    DATA mr_fkart  TYPE RANGE OF fkart.
+
+    " --- Working data of the packing list being built ----------------------
+    DATA mt_messages TYPE bapiret2_t.
 
     METHODS add
       IMPORTING iv_type TYPE bapi_mtype DEFAULT 'E'
@@ -146,65 +256,70 @@ CLASS zcl_sd_epack_data DEFINITION
                 iv_v3   TYPE simple OPTIONAL
                 iv_v4   TYPE simple OPTIONAL.
 
-    METHODS load_packing_list
-      IMPORTING iv_packno TYPE zsd_packno
-      RAISING   zcx_sd_epack.
+    METHODS read_sap_data
+      IMPORTING it_packing_lists TYPE zif_sd_epack=>tt_packing_list.
 
-    METHODS read_invoices.
+    METHODS read_addresses
+      IMPORTING it_adrnr TYPE tt_key_adrnr.
 
-    METHODS check_authority.
+    METHODS build_one
+      IMPORTING is_pl            TYPE zif_sd_epack=>ts_packing_list
+                iv_format        TYPE char1
+      RETURNING VALUE(rs_result) TYPE zif_sd_epack=>ts_result.
 
-    METHODS check_consistency.
+    METHODS check_invoices
+      IMPORTING is_pl          TYPE zif_sd_epack=>ts_packing_list
+      RETURNING VALUE(rt_vbrk) TYPE tt_vbrk_list.
 
-    METHODS read_partners.
+    METHODS check_consistency
+      IMPORTING it_vbrk TYPE tt_vbrk_list.
 
-    METHODS read_addresses.
+    METHODS check_authority
+      IMPORTING it_vbrk TYPE tt_vbrk_list.
+
+    METHODS partner
+      IMPORTING is_vbrk           TYPE ty_vbrk
+                iv_parvw          TYPE parvw
+      RETURNING VALUE(rs_partner) TYPE ty_partner.
 
     METHODS determine_form
-      IMPORTING iv_format      TYPE char1
-                iv_np_count    TYPE i
+      IMPORTING is_header      TYPE zsd_epack_hdr
+                iv_format      TYPE char1
+      EXPORTING ev_np_count    TYPE i
       RETURNING VALUE(rv_form) TYPE tdsfname.
 
+    METHODS goods_lines
+      IMPORTING is_pl           TYPE zif_sd_epack=>ts_packing_list
+                it_vbrp         TYPE tt_vbrp
+      RETURNING VALUE(rt_lines) TYPE zif_sd_epack=>tt_text_line.
+
     METHODS resolve_items
-      EXPORTING et_items    TYPE zif_sd_epack=>tt_item
-                et_headings TYPE zif_sd_epack=>tt_hsn_heading.
+      IMPORTING is_pl          TYPE zif_sd_epack=>ts_packing_list
+                it_vbrp        TYPE tt_vbrp
+                it_goods       TYPE zif_sd_epack=>tt_text_line
+      EXPORTING et_items       TYPE zif_sd_epack=>tt_item
+                et_headings    TYPE zif_sd_epack=>tt_hsn_heading.
 
-    METHODS build_header
-      IMPORTING is_totals        TYPE zif_sd_epack=>ts_totals
-      RETURNING VALUE(rs_header) TYPE zsd_s_epack_prt_hdr.
-
-    METHODS build_texts
-      IMPORTING it_headings     TYPE zif_sd_epack=>tt_hsn_heading
-      RETURNING VALUE(rt_texts) TYPE zsd_tt_epack_prt_txt.
+    METHODS order_reference
+      IMPORTING it_vbrp         TYPE tt_vbrp
+      RETURNING VALUE(rt_lines) TYPE zif_sd_epack=>tt_text_line.
 
     METHODS exporter_lines
+      IMPORTING iv_adrnr        TYPE adrnr
+                iv_gstin        TYPE csequence
       RETURNING VALUE(rt_lines) TYPE zif_sd_epack=>tt_text_line.
 
     METHODS party_lines
-      IMPORTING is_party        TYPE ty_party
-                iv_with_tax_no  TYPE abap_bool DEFAULT abap_false
+      IMPORTING is_partner      TYPE ty_partner
       RETURNING VALUE(rt_lines) TYPE zif_sd_epack=>tt_text_line.
-
-    METHODS order_reference
-      RETURNING VALUE(rt_lines) TYPE zif_sd_epack=>tt_text_line.
-
-    METHODS payment_lines
-      RETURNING VALUE(rt_lines) TYPE zif_sd_epack=>tt_text_line.
-
-    METHODS comm_value
-      IMPORTING iv_adrnr        TYPE adrnr
-                iv_kind         TYPE char1
-                iv_r3_user      TYPE adr2-r3_user OPTIONAL
-      RETURNING VALUE(rv_value) TYPE string.
 
     METHODS country_text
       IMPORTING iv_land1       TYPE land1
       RETURNING VALUE(rv_text) TYPE string.
 
-    METHODS region_text
-      IMPORTING iv_land1       TYPE land1
-                iv_region      TYPE regio
-      RETURNING VALUE(rv_text) TYPE string.
+    METHODS matnr_of
+      IMPORTING iv_partno       TYPE zsd_partno
+      RETURNING VALUE(rv_matnr) TYPE matnr.
 
     CLASS-METHODS join
       IMPORTING it_parts       TYPE string_table
@@ -216,160 +331,106 @@ CLASS zcl_sd_epack_data DEFINITION
                 it_lines TYPE zif_sd_epack=>tt_text_line
       CHANGING  ct_texts TYPE zsd_tt_epack_prt_txt.
 
-    CLASS-METHODS to_matnr
-      IMPORTING iv_partno       TYPE zsd_partno
-      RETURNING VALUE(rv_matnr) TYPE matnr.
+    CLASS-METHODS steuc_of
+      IMPORTING iv_hsn          TYPE csequence
+      RETURNING VALUE(rv_steuc) TYPE steuc.
 
 ENDCLASS.
 
 
 CLASS zcl_sd_epack_data IMPLEMENTATION.
 
-  METHOD resolve_packno.
+  METHOD prepare.
 
-    TYPES: BEGIN OF ty_link,
-             zsd_packno TYPE zsd_packno,
-             vbeln      TYPE vbeln_vf,
-           END OF ty_link.
-    DATA lt_link TYPE STANDARD TABLE OF ty_link WITH EMPTY KEY.
+    read_sap_data( it_packing_lists ).
 
-    CLEAR mt_messages.
+    LOOP AT it_packing_lists INTO DATA(ls_pl).
+      INSERT build_one( is_pl     = ls_pl
+                        iv_format = iv_format ) INTO TABLE rt_result.
+    ENDLOOP.
 
-    IF iv_packno IS INITIAL AND it_vbeln IS INITIAL.
+  ENDMETHOD.
+
+
+  METHOD load_saved.
+
+    DATA lt_packno TYPE SORTED TABLE OF zsd_packno WITH UNIQUE KEY table_line.
+    DATA lt_hdr    TYPE STANDARD TABLE OF zsd_epack_hdr  WITH EMPTY KEY.
+    DATA lt_inv    TYPE STANDARD TABLE OF zsd_epack_inv  WITH EMPTY KEY.
+    DATA lt_item   TYPE STANDARD TABLE OF zsd_epack_data WITH EMPTY KEY.
+
+    CLEAR: et_packing_lists, et_messages.
+
+    " An empty range would select everything - never allowed here
+    IF it_vbeln IS INITIAL AND it_packno IS INITIAL.
       zcx_sd_epack=>raise( iv_msgno = '003' ).
     ENDIF.
 
-    IF iv_packno IS NOT INITIAL.
-      SELECT SINGLE zsd_packno FROM zsd_epack_hdr
-        WHERE zsd_packno = @iv_packno
-        INTO @rv_packno.
-      IF sy-subrc <> 0.
-        zcx_sd_epack=>raise( iv_msgno = '007' iv_v1 = iv_packno ).
-      ENDIF.
-    ELSE.
-      SELECT zsd_packno, vbeln FROM zsd_epack_inv
-        WHERE vbeln IN @it_vbeln
-        INTO TABLE @lt_link.
-
-      " Invoices entered one by one must all be linked. Invoices that
-      " merely fall inside an entered From-To range are ignored when they
-      " are not linked (ASSUMPTION A03).
-      LOOP AT it_vbeln INTO DATA(ls_sel) WHERE sign = 'I' AND option = 'EQ'.
-        IF NOT line_exists( lt_link[ vbeln = ls_sel-low ] ).
-          add( iv_no = '004' iv_v1 = |{ ls_sel-low ALPHA = OUT }| ).
-        ENDIF.
-      ENDLOOP.
-
-      DATA(lt_pl) = lt_link.
-      SORT lt_pl BY zsd_packno.
-      DELETE ADJACENT DUPLICATES FROM lt_pl COMPARING zsd_packno.
-
-      CASE lines( lt_pl ).
-        WHEN 0.
-          IF mt_messages IS INITIAL.
-            add( iv_no = '046' ).
-          ENDIF.
-        WHEN 1.
-          rv_packno = lt_pl[ 1 ]-zsd_packno.
-        WHEN OTHERS.
-          add( iv_no = '005' iv_v1 = lt_pl[ 1 ]-zsd_packno iv_v2 = lt_pl[ 2 ]-zsd_packno ).
-      ENDCASE.
-
-      IF mt_messages IS NOT INITIAL.
-        zcx_sd_epack=>raise_from_messages( mt_messages ).
-      ENDIF.
-    ENDIF.
-
-    " The packing list is a unit: when invoices were entered, every
-    " invoice of the packing list must be part of the selection
-    " (ASSUMPTION A02).
     IF it_vbeln IS NOT INITIAL.
       SELECT zsd_packno, vbeln FROM zsd_epack_inv
-        WHERE zsd_packno = @rv_packno
-        INTO TABLE @lt_link.
+        WHERE vbeln IN @it_vbeln
+        INTO TABLE @DATA(lt_link).
       LOOP AT lt_link INTO DATA(ls_link).
-        IF ls_link-vbeln NOT IN it_vbeln.
-          add( iv_no = '006' iv_v1 = rv_packno iv_v2 = |{ ls_link-vbeln ALPHA = OUT }| ).
-        ENDIF.
+        INSERT ls_link-zsd_packno INTO TABLE lt_packno.
       ENDLOOP.
-      LOOP AT it_vbeln INTO ls_sel WHERE sign = 'I' AND option = 'EQ'.
+      " Invoices entered one by one must belong to a packing list
+      LOOP AT it_vbeln INTO DATA(ls_sel) WHERE sign = 'I' AND option = 'EQ'.
         IF NOT line_exists( lt_link[ vbeln = ls_sel-low ] ).
-          add( iv_no = '045' iv_v1 = |{ ls_sel-low ALPHA = OUT }| iv_v2 = rv_packno ).
+          APPEND zcl_sd_epack_rules=>msg( iv_type = 'E' iv_no = '004'
+                                          iv_v1 = |{ ls_sel-low ALPHA = OUT }| ) TO et_messages.
         ENDIF.
       ENDLOOP.
-      IF mt_messages IS NOT INITIAL.
-        zcx_sd_epack=>raise_from_messages( mt_messages ).
+    ENDIF.
+
+    IF it_packno IS NOT INITIAL.
+      SELECT zsd_packno FROM zsd_epack_hdr
+        WHERE zsd_packno IN @it_packno
+        INTO TABLE @DATA(lt_hdr_key).
+      LOOP AT lt_hdr_key INTO DATA(ls_hdr_key).
+        INSERT ls_hdr_key-zsd_packno INTO TABLE lt_packno.
+      ENDLOOP.
+    ENDIF.
+
+    IF lt_packno IS INITIAL.
+      zcx_sd_epack=>raise( iv_msgno = '046' it_messages = et_messages ).
+    ENDIF.
+
+    SELECT * FROM zsd_epack_hdr
+      FOR ALL ENTRIES IN @lt_packno
+      WHERE zsd_packno = @lt_packno-table_line
+      INTO TABLE @lt_hdr.
+
+    SELECT * FROM zsd_epack_inv
+      FOR ALL ENTRIES IN @lt_packno
+      WHERE zsd_packno = @lt_packno-table_line
+      INTO TABLE @lt_inv.
+
+    SELECT * FROM zsd_epack_data
+      FOR ALL ENTRIES IN @lt_packno
+      WHERE zsd_packno = @lt_packno-table_line
+      INTO TABLE @lt_item.
+
+    SORT lt_inv  BY zsd_packno vbeln.
+    SORT lt_item BY zsd_packno zsd_sn.
+
+    LOOP AT lt_hdr INTO DATA(ls_hdr).
+      DATA(ls_pl) = VALUE zif_sd_epack=>ts_packing_list( packno = ls_hdr-zsd_packno
+                                                         header = ls_hdr ).
+      LOOP AT lt_inv INTO DATA(ls_inv) WHERE zsd_packno = ls_hdr-zsd_packno.
+        INSERT ls_inv-vbeln INTO TABLE ls_pl-invoices.
+        IF it_vbeln IS NOT INITIAL AND ls_inv-vbeln NOT IN it_vbeln.
+          APPEND zcl_sd_epack_rules=>msg( iv_type = 'I' iv_no = '006' iv_v1 = ls_hdr-zsd_packno
+                                          iv_v2 = |{ ls_inv-vbeln ALPHA = OUT }| ) TO ls_pl-messages.
+        ENDIF.
+      ENDLOOP.
+      LOOP AT lt_item INTO DATA(ls_item) WHERE zsd_packno = ls_hdr-zsd_packno.
+        APPEND ls_item TO ls_pl-items.
+      ENDLOOP.
+      IF ls_pl-invoices IS INITIAL OR ls_pl-items IS INITIAL.
+        APPEND zcl_sd_epack_rules=>msg( iv_type = 'E' iv_no = '047' iv_v1 = ls_hdr-zsd_packno ) TO ls_pl-messages.
       ENDIF.
-    ENDIF.
-
-  ENDMETHOD.
-
-
-  METHOD get_print_data.
-
-    CLEAR: mt_messages, ms_pl, mt_vbrk, mt_vbrp, ms_sold_to, ms_ship_to,
-           mt_address, mt_comm, mv_company_adrnr, mv_gstin.
-
-    load_packing_list( iv_packno ).
-    read_invoices( ).
-    check_authority( ).
-    check_consistency( ).
-    read_partners( ).
-
-    " FS 2.1 - checked again at output time although the upload already
-    " rejects it: the table may have been changed by other means.
-    APPEND LINES OF zcl_sd_epack_rules=>check_weights( ms_pl-items ) TO mt_messages.
-
-    DATA(lv_np_count) = 0.
-    DO zif_sd_epack=>gc_max_np TIMES.
-      ASSIGN COMPONENT |ZSD_NP{ sy-index }| OF STRUCTURE ms_pl-header TO FIELD-SYMBOL(<lv_np>).
-      IF sy-subrc = 0 AND <lv_np> IS NOT INITIAL.
-        lv_np_count += 1.
-      ENDIF.
-    ENDDO.
-    rs_data-form = determine_form( iv_format   = iv_format
-                                   iv_np_count = lv_np_count ).
-
-    IF zcl_sd_epack_rules=>has_errors( mt_messages ).
-      zcx_sd_epack=>raise_from_messages( mt_messages ).
-    ENDIF.
-
-    read_addresses( ).
-
-    resolve_items( IMPORTING et_items    = DATA(lt_items)
-                             et_headings = DATA(lt_headings) ).
-
-    DATA(ls_totals) = zcl_sd_epack_rules=>calc_totals( lt_items ).
-
-    rs_data-header = build_header( ls_totals ).
-    rs_data-header-np_count = lv_np_count.
-    rs_data-texts  = build_texts( lt_headings ).
-    rs_data-items  = zcl_sd_epack_rules=>build_print_items( it_items    = lt_items
-                                                            it_headings = lt_headings ).
-
-    IF zcl_sd_epack_rules=>has_errors( mt_messages ).
-      zcx_sd_epack=>raise_from_messages( mt_messages ).
-    ENDIF.
-
-  ENDMETHOD.
-
-
-  METHOD get_warnings.
-    rt_messages = mt_messages.
-    DELETE rt_messages WHERE type CA 'EAX'.
-  ENDMETHOD.
-
-
-  METHOD mark_printed.
-
-    UPDATE zsd_epack_hdr
-      SET zsd_prnam = @sy-uname,
-          zsd_prdat = @sy-datum,
-          zsd_przet = @sy-uzeit
-      WHERE zsd_packno = @iv_packno.
-    IF sy-subrc = 0.
-      COMMIT WORK.
-    ENDIF.
+      INSERT ls_pl INTO TABLE et_packing_lists.
+    ENDLOOP.
 
   ENDMETHOD.
 
@@ -381,57 +442,479 @@ CLASS zcl_sd_epack_data IMPLEMENTATION.
   ENDMETHOD.
 
 
-  METHOD load_packing_list.
+  METHOD read_sap_data.
 
-    SELECT SINGLE * FROM zsd_epack_hdr
-      WHERE zsd_packno = @iv_packno
-      INTO @ms_pl-header.
-    IF sy-subrc <> 0.
-      zcx_sd_epack=>raise( iv_msgno = '007' iv_v1 = iv_packno ).
+    TYPES: BEGIN OF ty_area,
+             kunnr TYPE kunnr,
+             vkorg TYPE vkorg,
+             vtweg TYPE vtweg,
+             spart TYPE spart,
+           END OF ty_area.
+    DATA lt_inv    TYPE SORTED TABLE OF vbeln_vf WITH UNIQUE KEY table_line.
+    DATA lt_area   TYPE SORTED TABLE OF ty_area WITH UNIQUE KEY kunnr vkorg vtweg spart.
+    DATA lt_kunnr  TYPE SORTED TABLE OF kunnr WITH UNIQUE KEY table_line.
+    DATA lt_bukrs  TYPE SORTED TABLE OF bukrs WITH UNIQUE KEY table_line.
+    DATA lt_adrnr  TYPE tt_key_adrnr.
+    DATA lt_aubel  TYPE SORTED TABLE OF vbeln WITH UNIQUE KEY table_line.
+    DATA lt_vgbel  TYPE SORTED TABLE OF vbeln WITH UNIQUE KEY table_line.
+    DATA lt_zterm  TYPE SORTED TABLE OF dzterm WITH UNIQUE KEY table_line.
+    DATA lt_matnr  TYPE SORTED TABLE OF matnr WITH UNIQUE KEY table_line.
+    DATA lt_steuc  TYPE SORTED TABLE OF steuc WITH UNIQUE KEY table_line.
+    DATA lt_branch TYPE SORTED TABLE OF ty_branch WITH UNIQUE KEY bukrs branch.
+
+    " Invoices of all packing lists, each one once
+    LOOP AT it_packing_lists INTO DATA(ls_pl).
+      INSERT LINES OF ls_pl-invoices INTO TABLE lt_inv.
+      LOOP AT ls_pl-items INTO DATA(ls_item) WHERE zsd_partno IS NOT INITIAL.
+        IF NOT line_exists( mt_matnr[ partno = ls_item-zsd_partno ] ).
+          INSERT VALUE #( partno = ls_item-zsd_partno matnr = matnr_of( ls_item-zsd_partno ) )
+                 INTO TABLE mt_matnr.
+        ENDIF.
+        IF ls_item-zsd_hsn IS NOT INITIAL.
+          INSERT steuc_of( ls_item-zsd_hsn ) INTO TABLE lt_steuc.
+        ENDIF.
+      ENDLOOP.
+    ENDLOOP.
+    IF lt_inv IS INITIAL.
+      RETURN.
     ENDIF.
 
-    SELECT vbeln FROM zsd_epack_inv
-      WHERE zsd_packno = @iv_packno
-      INTO TABLE @ms_pl-invoices.
+    " Billing documents - logic B3, B6, B11, B20, B26, B43, B44
+    SELECT vbeln, fkart, fksto, sfakn, bukrs, vkorg, vtweg, spart,
+           kunag, zterm, inco1, inco2, bupla
+      FROM vbrk
+      FOR ALL ENTRIES IN @lt_inv
+      WHERE vbeln = @lt_inv-table_line
+      INTO TABLE @mt_vbrk.
 
-    SELECT * FROM zsd_epack_data
-      WHERE zsd_packno = @iv_packno
-      ORDER BY zsd_sn
-      INTO TABLE @ms_pl-items.
+    " Billing items - logic B13 (AUBEL), B42 (MATNR)
+    SELECT vbeln, posnr, matnr, werks, aubel
+      FROM vbrp
+      FOR ALL ENTRIES IN @lt_inv
+      WHERE vbeln = @lt_inv-table_line
+      INTO TABLE @mt_vbrp.
 
-    IF ms_pl-invoices IS INITIAL OR ms_pl-items IS INITIAL.
-      zcx_sd_epack=>raise( iv_msgno = '047' iv_v1 = iv_packno ).
+    " Allowed billing types (A11) - one read, empty = all allowed
+    SELECT sign, opti AS option, low, high
+      FROM tvarvc
+      WHERE name = @zif_sd_epack=>gc_tvarv_fkart
+        AND type = 'S'
+      INTO CORRESPONDING FIELDS OF TABLE @mr_fkart.
+    DELETE mr_fkart WHERE low IS INITIAL AND high IS INITIAL.
+
+    LOOP AT mt_vbrk INTO DATA(ls_vbrk).
+      INSERT VALUE #( kunnr = ls_vbrk-kunag vkorg = ls_vbrk-vkorg
+                      vtweg = ls_vbrk-vtweg spart = ls_vbrk-spart ) INTO TABLE lt_area.
+      INSERT ls_vbrk-bukrs INTO TABLE lt_bukrs.
+      INSERT VALUE #( bukrs = ls_vbrk-bukrs branch = ls_vbrk-bupla ) INTO TABLE lt_branch.
+      INSERT ls_vbrk-zterm INTO TABLE lt_zterm.
+    ENDLOOP.
+
+    LOOP AT mt_vbrp INTO DATA(ls_vbrp).
+      IF ls_vbrp-aubel IS NOT INITIAL.
+        INSERT ls_vbrp-aubel INTO TABLE lt_aubel.
+      ENDIF.
+    ENDLOOP.
+
+    " Partners - logic B20 / B26: KNVP with KUNNR = KUNAG, PARVW SP / SH
+    IF lt_area IS NOT INITIAL.
+      SELECT kunnr, vkorg, vtweg, spart, parvw, parza, kunn2, defpa
+        FROM knvp
+        FOR ALL ENTRIES IN @lt_area
+        WHERE kunnr = @lt_area-kunnr
+          AND vkorg = @lt_area-vkorg
+          AND vtweg = @lt_area-vtweg
+          AND spart = @lt_area-spart
+          AND ( parvw = @zif_sd_epack=>gc_parvw-sold_to OR parvw = @zif_sd_epack=>gc_parvw-ship_to )
+        INTO TABLE @mt_knvp.
+    ENDIF.
+
+    LOOP AT mt_knvp INTO DATA(ls_knvp).
+      INSERT ls_knvp-kunn2 INTO TABLE lt_kunnr.
+    ENDLOOP.
+
+    IF lt_kunnr IS NOT INITIAL.
+      SELECT kunnr AS id, adrnr FROM kna1
+        FOR ALL ENTRIES IN @lt_kunnr
+        WHERE kunnr = @lt_kunnr-table_line
+        INTO TABLE @mt_kna1.
+    ENDIF.
+
+    " Exporter address - logic B3 / B11
+    IF lt_bukrs IS NOT INITIAL.
+      SELECT bukrs AS id, adrnr FROM t001
+        FOR ALL ENTRIES IN @lt_bukrs
+        WHERE bukrs = @lt_bukrs-table_line
+        INTO TABLE @mt_t001.
+
+      " CIN - logic B7
+      SELECT bukrs, paval FROM t001z
+        FOR ALL ENTRIES IN @lt_bukrs
+        WHERE bukrs = @lt_bukrs-table_line
+          AND party = @zif_sd_epack=>gc_cin_party
+        INTO TABLE @mt_t001z.
+    ENDIF.
+
+    " GST No. - logic B6
+    IF lt_branch IS NOT INITIAL.
+      SELECT bukrs, branch, gstin FROM j_1bbranch
+        FOR ALL ENTRIES IN @lt_branch
+        WHERE bukrs  = @lt_branch-bukrs
+          AND branch = @lt_branch-branch
+        INTO TABLE @mt_branch.
+    ENDIF.
+
+    LOOP AT mt_kna1 INTO DATA(ls_key).
+      INSERT VALUE #( id = ls_key-adrnr adrnr = ls_key-adrnr ) INTO TABLE lt_adrnr.
+    ENDLOOP.
+    LOOP AT mt_t001 INTO ls_key.
+      INSERT VALUE #( id = ls_key-adrnr adrnr = ls_key-adrnr ) INTO TABLE lt_adrnr.
+    ENDLOOP.
+    DELETE lt_adrnr WHERE adrnr IS INITIAL.
+    read_addresses( lt_adrnr ).
+
+    " Order no. & date - logic B13: VBRP-AUBEL -> VBAK-VGBEL -> VBKD
+    IF lt_aubel IS NOT INITIAL.
+      SELECT vbeln, vgbel FROM vbak
+        FOR ALL ENTRIES IN @lt_aubel
+        WHERE vbeln = @lt_aubel-table_line
+        INTO TABLE @mt_vbak.
+      LOOP AT mt_vbak INTO DATA(ls_vbak) WHERE vgbel IS NOT INITIAL.
+        INSERT ls_vbak-vgbel INTO TABLE lt_vgbel.
+      ENDLOOP.
+    ENDIF.
+    IF lt_vgbel IS NOT INITIAL.
+      " Header business data of the quotation (item number 000000)
+      SELECT vbeln, bstkd, bstdk FROM vbkd
+        FOR ALL ENTRIES IN @lt_vgbel
+        WHERE vbeln = @lt_vgbel-table_line
+          AND posnr = '000000'
+        INTO TABLE @mt_vbkd.
+    ENDIF.
+
+    " Payment term text - logic B43
+    IF lt_zterm IS NOT INITIAL.
+      SELECT zterm, ztagg, vtext FROM tvzbt
+        FOR ALL ENTRIES IN @lt_zterm
+        WHERE spras = @zif_sd_epack=>gc_langu
+          AND zterm = @lt_zterm-table_line
+        INTO TABLE @mt_tvzbt.
+    ENDIF.
+
+    " Materials: billed materials (B42) + Part No. of the line items (B54, B58)
+    LOOP AT mt_vbrp INTO ls_vbrp WHERE matnr IS NOT INITIAL.
+      INSERT ls_vbrp-matnr INTO TABLE lt_matnr.
+    ENDLOOP.
+    LOOP AT mt_matnr INTO DATA(ls_matnr) WHERE matnr IS NOT INITIAL.
+      INSERT ls_matnr-matnr INTO TABLE lt_matnr.
+    ENDLOOP.
+
+    IF lt_matnr IS NOT INITIAL.
+      SELECT matnr, maktx FROM makt
+        FOR ALL ENTRIES IN @lt_matnr
+        WHERE matnr = @lt_matnr-table_line
+          AND spras = @zif_sd_epack=>gc_langu
+        INTO TABLE @mt_makt.
+    ENDIF.
+
+    " HSN of the billed material in the billing plant (B42, B58)
+    IF mt_vbrp IS NOT INITIAL.
+      SELECT matnr, werks, steuc FROM marc
+        FOR ALL ENTRIES IN @mt_vbrp
+        WHERE matnr = @mt_vbrp-matnr
+          AND werks = @mt_vbrp-werks
+        INTO TABLE @mt_marc.
+    ENDIF.
+
+    LOOP AT mt_marc INTO DATA(ls_marc) WHERE steuc IS NOT INITIAL.
+      INSERT ls_marc-steuc INTO TABLE lt_steuc.
+    ENDLOOP.
+
+    " HSN texts - logic B42: T604N with SPRAS = EN, LAND1 = IN
+    IF lt_steuc IS NOT INITIAL.
+      SELECT steuc, text1 FROM t604n
+        FOR ALL ENTRIES IN @lt_steuc
+        WHERE spras = @zif_sd_epack=>gc_langu
+          AND land1 = @zif_sd_epack=>gc_hsn_country
+          AND steuc = @lt_steuc-table_line
+        INTO TABLE @mt_t604n.
     ENDIF.
 
   ENDMETHOD.
 
 
-  METHOD read_invoices.
+  METHOD read_addresses.
 
-    DATA lr_fkart TYPE RANGE OF fkart.
+    DATA lt_adrc TYPE STANDARD TABLE OF ty_adrc WITH EMPTY KEY.
+    TYPES: BEGIN OF ty_region,
+             land1 TYPE land1,
+             bland TYPE regio,
+           END OF ty_region.
+    DATA lt_land   TYPE SORTED TABLE OF land1 WITH UNIQUE KEY table_line.
+    DATA lt_region TYPE SORTED TABLE OF ty_region WITH UNIQUE KEY land1 bland.
 
-    SELECT vbeln, fkart, fksto, sfakn, bukrs, vkorg, kunag, zterm,
-           inco1, inco2, bupla
-      FROM vbrk
-      FOR ALL ENTRIES IN @ms_pl-invoices
-      WHERE vbeln = @ms_pl-invoices-table_line
-      INTO TABLE @mt_vbrk.
+    IF it_adrnr IS INITIAL.
+      RETURN.
+    ENDIF.
 
-    SELECT vbeln, posnr, matnr, werks, aubel
-      FROM vbrp
-      FOR ALL ENTRIES IN @ms_pl-invoices
-      WHERE vbeln = @ms_pl-invoices-table_line
-      INTO TABLE @mt_vbrp.
+    " Logic B3 / B20 / B26 - address fields
+    SELECT addrnumber, date_from, name1, street, str_suppl1, city1, city2,
+           post_code1, region, country, building
+      FROM adrc
+      FOR ALL ENTRIES IN @it_adrnr
+      WHERE addrnumber = @it_adrnr-adrnr
+        AND nation     = @space
+        AND date_from <= @sy-datum
+      INTO TABLE @lt_adrc.
 
-    " Allowed billing types (ASSUMPTION A11)
-    SELECT sign, opti AS option, low, high
-      FROM tvarvc
-      WHERE name = @zif_sd_epack=>gc_tvarv_fkart
-        AND type = 'S'
-      INTO CORRESPONDING FIELDS OF TABLE @lr_fkart.
-    DELETE lr_fkart WHERE low IS INITIAL AND high IS INITIAL.
+    " Latest valid version of each address
+    SORT lt_adrc BY addrnumber date_from DESCENDING.
+    DELETE ADJACENT DUPLICATES FROM lt_adrc COMPARING addrnumber.
+    mt_adrc = lt_adrc.
 
-    LOOP AT ms_pl-invoices INTO DATA(lv_vbeln).
+    " Logic B21 / B27 - e-mail
+    SELECT addrnumber, flgdefault, consnumber, smtp_addr
+      FROM adr6
+      FOR ALL ENTRIES IN @it_adrnr
+      WHERE addrnumber = @it_adrnr-adrnr
+        AND persnumber = @space
+      INTO TABLE @mt_adr6.
+
+    " Logic B22 / B23 / B28 / B29 - telephone (R3_USER 1) and mobile (3)
+    SELECT addrnumber, r3_user, flgdefault, consnumber, telnr_long
+      FROM adr2
+      FOR ALL ENTRIES IN @it_adrnr
+      WHERE addrnumber = @it_adrnr-adrnr
+        AND persnumber = @space
+        AND ( r3_user = '1' OR r3_user = '3' )
+      INTO TABLE @mt_adr2.
+
+    " Logic B4 / B5 - country and region texts
+    LOOP AT mt_adrc INTO DATA(ls_adrc).
+      IF ls_adrc-country IS NOT INITIAL.
+        INSERT ls_adrc-country INTO TABLE lt_land.
+        IF ls_adrc-region IS NOT INITIAL.
+          INSERT VALUE #( land1 = ls_adrc-country bland = ls_adrc-region ) INTO TABLE lt_region.
+        ENDIF.
+      ENDIF.
+    ENDLOOP.
+
+    IF lt_land IS NOT INITIAL.
+      SELECT land1, landx FROM t005t
+        FOR ALL ENTRIES IN @lt_land
+        WHERE spras = @zif_sd_epack=>gc_langu
+          AND land1 = @lt_land-table_line
+        INTO TABLE @mt_t005t.
+    ENDIF.
+
+    IF lt_region IS NOT INITIAL.
+      SELECT land1, bland, bezei FROM t005u
+        FOR ALL ENTRIES IN @lt_region
+        WHERE spras = @zif_sd_epack=>gc_langu
+          AND land1 = @lt_region-land1
+          AND bland = @lt_region-bland
+        INTO TABLE @mt_t005u.
+    ENDIF.
+
+  ENDMETHOD.
+
+
+  METHOD build_one.
+
+    DATA lt_vbrp     TYPE tt_vbrp.
+    DATA lt_items    TYPE zif_sd_epack=>tt_item.
+    DATA lt_headings TYPE zif_sd_epack=>tt_hsn_heading.
+    DATA lt_vbrk     TYPE tt_vbrk_list.
+    DATA lv_np_count TYPE i.
+    DATA ls_vbrk     TYPE ty_vbrk.
+    DATA ls_sold_to  TYPE ty_partner.
+    DATA ls_ship_to  TYPE ty_partner.
+
+    mt_messages = is_pl-messages.
+
+    rs_result-packno     = is_pl-packno.
+    rs_result-inv_count  = lines( is_pl-invoices ).
+    rs_result-item_count = lines( is_pl-items ).
+
+    " Errors from the upload (structure, mandatory data, weights) stop
+    " this packing list - but no other one
+    IF NOT zcl_sd_epack_rules=>has_errors( mt_messages ).
+
+      lt_vbrk = check_invoices( is_pl ).
+      check_consistency( lt_vbrk ).
+      check_authority( lt_vbrk ).
+
+      " FS 2.1 - GW >= NW at output time (again, for saved data)
+      IF NOT line_exists( mt_messages[ number = '001' ] ).
+        APPEND LINES OF zcl_sd_epack_rules=>check_weights( is_pl-items ) TO mt_messages.
+      ENDIF.
+
+      determine_form( EXPORTING is_header   = is_pl-header
+                                iv_format   = iv_format
+                      IMPORTING ev_np_count = lv_np_count
+                      RECEIVING rv_form     = rs_result-print-form ).
+
+      " ---- All invoices agree (CHECK_CONSISTENCY), so the header values
+      "      of any of them are the values of all of them -----------------
+      IF NOT zcl_sd_epack_rules=>has_errors( mt_messages ) AND lt_vbrk IS NOT INITIAL.
+        ls_vbrk    = lt_vbrk[ 1 ].
+        " Logic B20 / B26 - a missing partner is an error (no consignee)
+        ls_sold_to = partner( is_vbrk = ls_vbrk iv_parvw = zif_sd_epack=>gc_parvw-sold_to ).
+        ls_ship_to = partner( is_vbrk = ls_vbrk iv_parvw = zif_sd_epack=>gc_parvw-ship_to ).
+      ENDIF.
+    ENDIF.
+
+    IF zcl_sd_epack_rules=>has_errors( mt_messages ).
+      rs_result-status   = zif_sd_epack=>gc_status-error.
+      rs_result-messages = mt_messages.
+      RETURN.
+    ENDIF.
+
+    " Billing items of THIS packing list's invoices only
+    LOOP AT is_pl-invoices INTO DATA(lv_vbeln).
+      LOOP AT mt_vbrp INTO DATA(ls_vbrp) WHERE vbeln = lv_vbeln.
+        INSERT ls_vbrp INTO TABLE lt_vbrp.
+      ENDLOOP.
+    ENDLOOP.
+
+    DATA(lv_company_adrnr) = VALUE adrnr( mt_t001[ id = ls_vbrk-bukrs ]-adrnr OPTIONAL ).
+    DATA(ls_company)       = VALUE ty_adrc( mt_adrc[ addrnumber = lv_company_adrnr ] OPTIONAL ).
+    DATA(lv_gstin)         = VALUE ty_branch-gstin( mt_branch[ bukrs = ls_vbrk-bukrs branch = ls_vbrk-bupla ]-gstin OPTIONAL ).
+
+    DATA(ls_header) = VALUE zsd_s_epack_prt_hdr(
+      packno     = is_pl-header-zsd_packno
+      packdt_txt = zcl_sd_epack_rules=>format_date( is_pl-header-zsd_packdt )
+      revno      = is_pl-header-zsd_revno
+      gstin      = lv_gstin
+      cin        = VALUE #( mt_t001z[ bukrs = ls_vbrk-bukrs ]-paval OPTIONAL )
+      cnty_orgn  = is_pl-header-zsd_cnty_orgn
+      cnty_dest  = country_text( VALUE #( mt_adrc[ addrnumber = ls_ship_to-adrnr ]-country OPTIONAL ) )
+      same_party = xsdbool( ls_sold_to-kunnr = ls_ship_to-kunnr )
+      prec       = is_pl-header-zsd_prec
+      rec_pc     = is_pl-header-zsd_rec_pc
+      vsl_flt    = is_pl-header-zsd_vsl_flt
+      pol        = is_pl-header-zsd_pol
+      pod        = is_pl-header-zsd_pod
+      pld        = is_pl-header-zsd_pld
+      np_count   = lv_np_count ).
+
+    " Exporter's Ref. - logic B11: company address field BUILDING
+    IF ls_company-building IS NOT INITIAL.
+      ls_header-iec = COND #( WHEN ls_company-building CS 'IEC'
+                              THEN ls_company-building
+                              ELSE |IEC:{ ls_company-building }| ).
+    ENDIF.
+
+    IF lv_gstin IS INITIAL.
+      add( iv_type = 'W' iv_no = '049' iv_v1 = 'GST No.' ).
+    ENDIF.
+    IF ls_header-cin IS INITIAL.
+      add( iv_type = 'W' iv_no = '049' iv_v1 = 'CIN No.' ).
+    ENDIF.
+    IF ls_header-iec IS INITIAL.
+      add( iv_type = 'W' iv_no = '049' iv_v1 = 'IEC (Exporter''s Ref.)' ).
+    ENDIF.
+
+    " ---- Description of goods (B42) and line items (B47-B58) ------------
+    DATA(lt_goods) = goods_lines( is_pl = is_pl it_vbrp = lt_vbrp ).
+
+    resolve_items( EXPORTING is_pl       = is_pl
+                             it_vbrp     = lt_vbrp
+                             it_goods    = lt_goods
+                   IMPORTING et_items    = lt_items
+                             et_headings = lt_headings ).
+
+    DATA(ls_totals) = zcl_sd_epack_rules=>calc_totals( lt_items ).
+    ls_header-tot_art_txt = |{ ls_totals-articles }|.
+    ls_header-tot_qty_txt = zcl_sd_epack_rules=>format_quantity( ls_totals-quantity ).
+    ls_header-tot_gwt_txt = zcl_sd_epack_rules=>format_weight( ls_totals-gross ).
+    ls_header-tot_nwt_txt = zcl_sd_epack_rules=>format_weight( ls_totals-net ).
+    ls_header-tot_text    = |({ zcl_sd_epack_rules=>total_text( ls_totals ) })|.
+
+    " ---- Text blocks -----------------------------------------------------
+    DATA lt_texts TYPE zsd_tt_epack_prt_txt.
+
+    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-exporter
+                            it_lines = exporter_lines( iv_adrnr = lv_company_adrnr iv_gstin = lv_gstin )
+                  CHANGING  ct_texts = lt_texts ).
+    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-sold_to
+                            it_lines = party_lines( ls_sold_to )
+                  CHANGING  ct_texts = lt_texts ).
+    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-ship_to
+                            it_lines = party_lines( ls_ship_to )
+                  CHANGING  ct_texts = lt_texts ).
+
+    " Logic B31 - notify parties 1-5
+    DO zif_sd_epack=>gc_max_np TIMES.
+      DATA(lv_np) = sy-index.
+      ASSIGN COMPONENT |ZSD_NP{ lv_np }| OF STRUCTURE is_pl-header TO FIELD-SYMBOL(<lv_np>).
+      IF sy-subrc = 0.
+        append_block( EXPORTING iv_block = CONV #( |NP{ lv_np }| )
+                                it_lines = zcl_sd_epack_rules=>split_lines( <lv_np> )
+                      CHANGING  ct_texts = lt_texts ).
+      ENDIF.
+    ENDDO.
+
+    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-order_ref
+                            it_lines = order_reference( lt_vbrp )
+                  CHANGING  ct_texts = lt_texts ).
+
+    " Logic B14 - Buyer's reference no. & date
+    DATA(lv_buyer_ref) = condense( CONV string( is_pl-header-zsd_party_ref ) ).
+    IF is_pl-header-zsd_ref_dt IS NOT INITIAL.
+      lv_buyer_ref = |{ lv_buyer_ref } DATE: { zcl_sd_epack_rules=>format_date( is_pl-header-zsd_ref_dt ) }|.
+    ENDIF.
+    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-buyer_ref
+                            it_lines = zcl_sd_epack_rules=>split_lines( lv_buyer_ref )
+                  CHANGING  ct_texts = lt_texts ).
+
+    " Logic B43 / B44 - payment term text, Incoterms 1 + 2
+    DATA(lv_vtext) = VALUE tvzbt-vtext( ).
+    LOOP AT mt_tvzbt INTO DATA(ls_tvzbt) WHERE zterm = ls_vbrk-zterm.
+      lv_vtext = ls_tvzbt-vtext.          " first day limit = lowest ZTAGG
+      EXIT.
+    ENDLOOP.
+    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-payment
+                            it_lines = VALUE #( ( |PAYMENT TERM: { COND string( WHEN lv_vtext IS NOT INITIAL
+                                                                                THEN lv_vtext
+                                                                                ELSE ls_vbrk-zterm ) }| )
+                                                ( condense( |TERMS OF SHIPMENT :- { ls_vbrk-inco1 } { ls_vbrk-inco2 }| ) ) )
+                  CHANGING  ct_texts = lt_texts ).
+
+    " Logic B39 / B40 / B41 / B61
+    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-marks
+                            it_lines = zcl_sd_epack_rules=>split_lines( is_pl-header-zsd_mark )
+                  CHANGING  ct_texts = lt_texts ).
+    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-container
+                            it_lines = zcl_sd_epack_rules=>split_lines( is_pl-header-zsd_cont )
+                  CHANGING  ct_texts = lt_texts ).
+    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-packages
+                            it_lines = zcl_sd_epack_rules=>split_lines( is_pl-header-zsd_nopack )
+                  CHANGING  ct_texts = lt_texts ).
+    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-goods
+                            it_lines = lt_goods
+                  CHANGING  ct_texts = lt_texts ).
+    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-declaration
+                            it_lines = zcl_sd_epack_rules=>split_lines( is_pl-header-zsd_pl_decl )
+                  CHANGING  ct_texts = lt_texts ).
+
+    rs_result-bukrs        = ls_vbrk-bukrs.
+    rs_result-print-header = ls_header.
+    rs_result-print-texts  = lt_texts.
+    rs_result-print-items  = zcl_sd_epack_rules=>build_print_items( it_items    = lt_items
+                                                                    it_headings = lt_headings ).
+
+    rs_result-messages = mt_messages.
+    rs_result-status   = COND #( WHEN line_exists( mt_messages[ type = 'W' ] )
+                                 THEN zif_sd_epack=>gc_status-warning
+                                 ELSE zif_sd_epack=>gc_status-success ).
+
+  ENDMETHOD.
+
+
+  METHOD check_invoices.
+
+    LOOP AT is_pl-invoices INTO DATA(lv_vbeln).
       DATA(lv_ext) = |{ lv_vbeln ALPHA = OUT }|.
       READ TABLE mt_vbrk INTO DATA(ls_vbrk) WITH TABLE KEY vbeln = lv_vbeln.
       IF sy-subrc <> 0.
@@ -440,9 +923,60 @@ CLASS zcl_sd_epack_data IMPLEMENTATION.
       ENDIF.
       IF ls_vbrk-fksto = abap_true OR ls_vbrk-sfakn IS NOT INITIAL.
         add( iv_no = '009' iv_v1 = lv_ext ).
+        CONTINUE.
       ENDIF.
-      IF lr_fkart IS NOT INITIAL AND ls_vbrk-fkart NOT IN lr_fkart.
+      IF mr_fkart IS NOT INITIAL AND ls_vbrk-fkart NOT IN mr_fkart.
         add( iv_no = '010' iv_v1 = lv_ext iv_v2 = ls_vbrk-fkart ).
+        CONTINUE.
+      ENDIF.
+      INSERT ls_vbrk INTO TABLE rt_vbrk.
+    ENDLOOP.
+
+    IF rt_vbrk IS INITIAL AND NOT zcl_sd_epack_rules=>has_errors( mt_messages ).
+      add( iv_no = '047' iv_v1 = is_pl-packno ).
+    ENDIF.
+
+  ENDMETHOD.
+
+
+  METHOD check_consistency.
+
+    " One packing list prints ONE exporter, GSTIN, buyer, consignee,
+    " payment term and Incoterm. The logic sheet reads them "from VBRK";
+    " if the invoices of a packing list disagree, no single value is
+    " correct, so the packing list is rejected rather than printing the
+    " value of an arbitrary invoice (A04 / Q04).
+    IF lines( it_vbrk ) < 2.
+      RETURN.
+    ENDIF.
+
+    DATA(lt_vbrk) = it_vbrk.
+    DATA(ls_first) = VALUE ty_vbrk( ).
+    LOOP AT lt_vbrk INTO DATA(ls_vbrk).
+      IF sy-tabix = 1.
+        ls_first = ls_vbrk.
+        CONTINUE.
+      ENDIF.
+      DATA(lv_inv) = |{ ls_first-vbeln ALPHA = OUT }/{ ls_vbrk-vbeln ALPHA = OUT }|.
+      IF ls_vbrk-bukrs <> ls_first-bukrs.
+        add( iv_no = '011' iv_v1 = 'Company code' iv_v2 = |{ ls_first-bukrs } / { ls_vbrk-bukrs }| iv_v3 = lv_inv ).
+      ENDIF.
+      IF ls_vbrk-bupla <> ls_first-bupla.
+        add( iv_no = '011' iv_v1 = 'Business place (GSTIN)' iv_v2 = |{ ls_first-bupla } / { ls_vbrk-bupla }| iv_v3 = lv_inv ).
+      ENDIF.
+      IF ls_vbrk-kunag <> ls_first-kunag.
+        add( iv_no = '011' iv_v1 = 'Sold-to party' iv_v2 = |{ ls_first-kunag ALPHA = OUT } / { ls_vbrk-kunag ALPHA = OUT }| iv_v3 = lv_inv ).
+      ENDIF.
+      IF ls_vbrk-vkorg <> ls_first-vkorg OR ls_vbrk-vtweg <> ls_first-vtweg OR ls_vbrk-spart <> ls_first-spart.
+        add( iv_no = '011' iv_v1 = 'Sales area' iv_v2 = |{ ls_first-vkorg }/{ ls_first-vtweg }/{ ls_first-spart } / {
+                                                          ls_vbrk-vkorg }/{ ls_vbrk-vtweg }/{ ls_vbrk-spart }| iv_v3 = lv_inv ).
+      ENDIF.
+      IF ls_vbrk-zterm <> ls_first-zterm.
+        add( iv_no = '011' iv_v1 = 'Payment terms' iv_v2 = |{ ls_first-zterm } / { ls_vbrk-zterm }| iv_v3 = lv_inv ).
+      ENDIF.
+      IF ls_vbrk-inco1 <> ls_first-inco1 OR ls_vbrk-inco2 <> ls_first-inco2.
+        add( iv_no = '011' iv_v1 = 'Incoterms' iv_v2 = |{ ls_first-inco1 } { ls_first-inco2 } / { ls_vbrk-inco1 } { ls_vbrk-inco2 }|
+                                               iv_v3 = lv_inv ).
       ENDIF.
     ENDLOOP.
 
@@ -451,605 +985,224 @@ CLASS zcl_sd_epack_data IMPLEMENTATION.
 
   METHOD check_authority.
 
-    " FS 2.3 "Security and Authorization" is empty - ASSUMPTION A24.
-    DATA(lt_vbrk) = mt_vbrk.
-    SORT lt_vbrk BY bukrs.
-    DELETE ADJACENT DUPLICATES FROM lt_vbrk COMPARING bukrs.
-    LOOP AT lt_vbrk INTO DATA(ls_vbrk).
-      AUTHORITY-CHECK OBJECT zif_sd_epack=>gc_auth_object
-        ID 'ACTVT' FIELD zif_sd_epack=>gc_actvt-print
-        ID 'BUKRS' FIELD ls_vbrk-bukrs.
+    " FS 2.3 is empty - A24. Results are buffered per value.
+    LOOP AT it_vbrk INTO DATA(ls_vbrk).
+
+      READ TABLE mt_auth INTO DATA(ls_auth)
+           WITH TABLE KEY object = zif_sd_epack=>gc_auth_object value = ls_vbrk-bukrs.
       IF sy-subrc <> 0.
+        AUTHORITY-CHECK OBJECT zif_sd_epack=>gc_auth_object
+          ID 'ACTVT' FIELD zif_sd_epack=>gc_actvt-print
+          ID 'BUKRS' FIELD ls_vbrk-bukrs.
+        ls_auth = VALUE #( object = zif_sd_epack=>gc_auth_object value = ls_vbrk-bukrs ok = xsdbool( sy-subrc = 0 ) ).
+        INSERT ls_auth INTO TABLE mt_auth.
+      ENDIF.
+      IF ls_auth-ok = abap_false.
         add( iv_no = '012' iv_v1 = 'Company code' iv_v2 = ls_vbrk-bukrs iv_v3 = zif_sd_epack=>gc_actvt-print ).
       ENDIF.
-    ENDLOOP.
 
-    lt_vbrk = mt_vbrk.
-    SORT lt_vbrk BY vkorg.
-    DELETE ADJACENT DUPLICATES FROM lt_vbrk COMPARING vkorg.
-    LOOP AT lt_vbrk INTO ls_vbrk.
-      AUTHORITY-CHECK OBJECT 'V_VBRK_VKO'
-        ID 'VKORG' FIELD ls_vbrk-vkorg
-        ID 'ACTVT' FIELD zif_sd_epack=>gc_actvt-print.
+      READ TABLE mt_auth INTO ls_auth WITH TABLE KEY object = 'V_VBRK_VKO' value = ls_vbrk-vkorg.
       IF sy-subrc <> 0.
+        AUTHORITY-CHECK OBJECT 'V_VBRK_VKO'
+          ID 'VKORG' FIELD ls_vbrk-vkorg
+          ID 'ACTVT' FIELD zif_sd_epack=>gc_actvt-print.
+        ls_auth = VALUE #( object = 'V_VBRK_VKO' value = ls_vbrk-vkorg ok = xsdbool( sy-subrc = 0 ) ).
+        INSERT ls_auth INTO TABLE mt_auth.
+      ENDIF.
+      IF ls_auth-ok = abap_false.
         add( iv_no = '012' iv_v1 = 'Sales org.' iv_v2 = ls_vbrk-vkorg iv_v3 = zif_sd_epack=>gc_actvt-print ).
       ENDIF.
+
     ENDLOOP.
+
+    " Report each missing authorization once per packing list
+    SORT mt_messages BY type id number message_v1 message_v2 message_v3 message_v4.
+    DELETE ADJACENT DUPLICATES FROM mt_messages COMPARING type id number message_v1 message_v2 message_v3 message_v4.
 
   ENDMETHOD.
 
 
-  METHOD check_consistency.
+  METHOD partner.
 
-    " One packing list prints ONE exporter, buyer, GSTIN, payment term and
-    " Incoterm - all invoices must agree (ASSUMPTION A04).
-    IF lines( mt_vbrk ) < 2.
+    " Logic B20 / B26: KNVP with KUNNR = KUNAG (and the sales area of the
+    " invoice, which is part of the KNVP key), PARVW = SP / SH -> KUNN2.
+    " Several partners of one function: default partner (DEFPA), else
+    " the first by counter PARZA (A31 / Q07).
+    DATA lv_count TYPE i.
+    DATA ls_hit   TYPE ty_knvp.
+
+    LOOP AT mt_knvp INTO DATA(ls_knvp)
+         WHERE kunnr = is_vbrk-kunag
+           AND vkorg = is_vbrk-vkorg
+           AND vtweg = is_vbrk-vtweg
+           AND spart = is_vbrk-spart
+           AND parvw = iv_parvw.
+      lv_count += 1.
+      IF ls_hit IS INITIAL OR ( ls_knvp-defpa = abap_true AND ls_hit-defpa = abap_false ).
+        ls_hit = ls_knvp.
+      ENDIF.
+    ENDLOOP.
+
+    DATA(lv_function) = COND string( WHEN iv_parvw = zif_sd_epack=>gc_parvw-sold_to THEN `Sold-to (SP)`
+                                                                                    ELSE `Ship-to (SH)` ).
+    IF lv_count = 0.
+      add( iv_no = '042' iv_v1 = lv_function iv_v2 = |{ is_vbrk-kunag ALPHA = OUT }|
+                                       iv_v3 = |{ is_vbrk-vkorg }/{ is_vbrk-vtweg }/{ is_vbrk-spart }| ).
       RETURN.
+    ELSEIF lv_count > 1.
+      add( iv_type = 'W' iv_no = '060' iv_v1 = |{ is_vbrk-kunag ALPHA = OUT }| iv_v2 = lv_count
+                                       iv_v3 = lv_function iv_v4 = |{ ls_hit-kunn2 ALPHA = OUT }| ).
     ENDIF.
 
-    DATA(ls_first) = mt_vbrk[ 1 ].
-    LOOP AT mt_vbrk INTO DATA(ls_vbrk) FROM 2.
-      IF ls_vbrk-bukrs <> ls_first-bukrs.
-        add( iv_no = '011' iv_v1 = 'Company code' iv_v2 = ls_first-bukrs iv_v3 = ls_vbrk-bukrs ).
-      ENDIF.
-      IF ls_vbrk-kunag <> ls_first-kunag.
-        add( iv_no = '011' iv_v1 = 'Sold-to party' iv_v2 = |{ ls_first-kunag ALPHA = OUT }| iv_v3 = |{ ls_vbrk-kunag ALPHA = OUT }| ).
-      ENDIF.
-      IF ls_vbrk-bupla <> ls_first-bupla.
-        add( iv_no = '011' iv_v1 = 'Business place (GSTIN)' iv_v2 = ls_first-bupla iv_v3 = ls_vbrk-bupla ).
-      ENDIF.
-      IF ls_vbrk-zterm <> ls_first-zterm.
-        add( iv_no = '011' iv_v1 = 'Payment terms' iv_v2 = ls_first-zterm iv_v3 = ls_vbrk-zterm ).
-      ENDIF.
-      IF ls_vbrk-inco1 <> ls_first-inco1 OR ls_vbrk-inco2 <> ls_first-inco2.
-        add( iv_no = '011' iv_v1 = 'Incoterms' iv_v2 = |{ ls_first-inco1 } { ls_first-inco2 }|
-                                               iv_v3 = |{ ls_vbrk-inco1 } { ls_vbrk-inco2 }| ).
-      ENDIF.
-    ENDLOOP.
-
-  ENDMETHOD.
-
-
-  METHOD read_partners.
-
-    DATA lt_partner TYPE tt_partner.
-    DATA lt_ship_to TYPE tt_partner.
-
-    IF mt_vbrk IS INITIAL.
-      RETURN.
-    ENDIF.
-
-    SELECT vbeln, posnr, parvw, kunnr, adrnr
-      FROM vbpa
-      FOR ALL ENTRIES IN @mt_vbrk
-      WHERE vbeln = @mt_vbrk-vbeln
-        AND ( parvw = @zif_sd_epack=>gc_parvw-sold_to OR parvw = @zif_sd_epack=>gc_parvw-ship_to )
-      INTO TABLE @lt_partner.
-
-    " Header partner (POSNR 000000) first, otherwise the first item partner
-    SORT lt_partner BY vbeln parvw posnr.
-
-    LOOP AT mt_vbrk INTO DATA(ls_vbrk).
-      READ TABLE lt_partner INTO DATA(ls_we)
-           WITH KEY vbeln = ls_vbrk-vbeln parvw = zif_sd_epack=>gc_parvw-ship_to.
-      IF sy-subrc <> 0.
-        add( iv_no = '042' iv_v1 = |{ ls_vbrk-vbeln ALPHA = OUT }| ).
-        CONTINUE.
-      ENDIF.
-      APPEND ls_we TO lt_ship_to.
-    ENDLOOP.
-
-    " Ship-to must be identical as well (ASSUMPTION A04)
-    DATA(lt_distinct) = lt_ship_to.
-    SORT lt_distinct BY kunnr.
-    DELETE ADJACENT DUPLICATES FROM lt_distinct COMPARING kunnr.
-    IF lines( lt_distinct ) > 1.
-      add( iv_no = '011' iv_v1 = 'Ship-to party'
-                         iv_v2 = |{ lt_distinct[ 1 ]-kunnr ALPHA = OUT }|
-                         iv_v3 = |{ lt_distinct[ 2 ]-kunnr ALPHA = OUT }| ).
-    ENDIF.
-
-    DATA(ls_first) = mt_vbrk[ 1 ].
-    READ TABLE lt_partner INTO DATA(ls_ag)
-         WITH KEY vbeln = ls_first-vbeln parvw = zif_sd_epack=>gc_parvw-sold_to.
-    ms_sold_to = VALUE #( kunnr = COND #( WHEN sy-subrc = 0 THEN ls_ag-kunnr ELSE ls_first-kunag )
-                          adrnr = COND #( WHEN sy-subrc = 0 THEN ls_ag-adrnr ) ).
-    IF lt_ship_to IS NOT INITIAL.
-      ms_ship_to = VALUE #( kunnr = lt_ship_to[ 1 ]-kunnr
-                            adrnr = lt_ship_to[ 1 ]-adrnr ).
-    ENDIF.
-
-    " Customer master: address number fallback + tax number (ASSUMPTION A16)
-    SELECT kunnr, adrnr, stcd1 FROM kna1
-      WHERE kunnr = @ms_sold_to-kunnr OR kunnr = @ms_ship_to-kunnr
-      INTO TABLE @DATA(lt_kna1).
-
-    LOOP AT lt_kna1 INTO DATA(ls_kna1).
-      IF ls_kna1-kunnr = ms_sold_to-kunnr.
-        ms_sold_to-stcd1 = ls_kna1-stcd1.
-        IF ms_sold_to-adrnr IS INITIAL.
-          ms_sold_to-adrnr = ls_kna1-adrnr.
-        ENDIF.
-      ENDIF.
-      IF ls_kna1-kunnr = ms_ship_to-kunnr.
-        ms_ship_to-stcd1 = ls_kna1-stcd1.
-        IF ms_ship_to-adrnr IS INITIAL.
-          ms_ship_to-adrnr = ls_kna1-adrnr.
-        ENDIF.
-      ENDIF.
-    ENDLOOP.
-
-  ENDMETHOD.
-
-
-  METHOD read_addresses.
-
-    DATA lt_adrnr TYPE SORTED TABLE OF adrnr WITH UNIQUE KEY table_line.
-    DATA lt_adrc  TYPE STANDARD TABLE OF ty_address WITH EMPTY KEY.
-
-    DATA(ls_vbrk) = mt_vbrk[ 1 ].
-
-    SELECT SINGLE adrnr FROM t001
-      WHERE bukrs = @ls_vbrk-bukrs
-      INTO @mv_company_adrnr.
-
-    INSERT mv_company_adrnr  INTO TABLE lt_adrnr.
-    INSERT ms_sold_to-adrnr  INTO TABLE lt_adrnr.
-    INSERT ms_ship_to-adrnr  INTO TABLE lt_adrnr.
-    DELETE lt_adrnr WHERE table_line IS INITIAL.
-
-    IF lt_adrnr IS INITIAL.
-      RETURN.
-    ENDIF.
-
-    SELECT addrnumber, date_from, name1, name2, name_co, street, str_suppl1,
-           str_suppl2, city1, city2, post_code1, region, country, building
-      FROM adrc
-      FOR ALL ENTRIES IN @lt_adrnr
-      WHERE addrnumber = @lt_adrnr-table_line
-        AND nation     = @space
-        AND date_from <= @sy-datum
-      INTO TABLE @lt_adrc.
-
-    " Latest valid version per address
-    SORT lt_adrc BY addrnumber date_from DESCENDING.
-    DELETE ADJACENT DUPLICATES FROM lt_adrc COMPARING addrnumber.
-    mt_address = lt_adrc.
-
-    " Communication data of the address itself (not of contact persons)
-    SELECT addrnumber, consnumber, flgdefault, r3_user, tel_number, telnr_long
-      FROM adr2
-      FOR ALL ENTRIES IN @lt_adrnr
-      WHERE addrnumber = @lt_adrnr-table_line
-        AND persnumber = @space
-      INTO TABLE @DATA(lt_adr2).
-
-    LOOP AT lt_adr2 INTO DATA(ls_adr2).
-      APPEND VALUE #( addrnumber = ls_adr2-addrnumber
-                      consnumber = ls_adr2-consnumber
-                      flgdefault = ls_adr2-flgdefault
-                      r3_user    = ls_adr2-r3_user
-                      kind       = COND #( WHEN ls_adr2-r3_user CA '23' THEN 'M' ELSE 'T' )
-                      value      = COND #( WHEN ls_adr2-telnr_long IS NOT INITIAL
-                                           THEN ls_adr2-telnr_long ELSE ls_adr2-tel_number ) )
-             TO mt_comm.
-    ENDLOOP.
-
-    SELECT addrnumber, consnumber, flgdefault, fax_number, faxnr_long
-      FROM adr3
-      FOR ALL ENTRIES IN @lt_adrnr
-      WHERE addrnumber = @lt_adrnr-table_line
-        AND persnumber = @space
-      INTO TABLE @DATA(lt_adr3).
-
-    LOOP AT lt_adr3 INTO DATA(ls_adr3).
-      APPEND VALUE #( addrnumber = ls_adr3-addrnumber
-                      consnumber = ls_adr3-consnumber
-                      flgdefault = ls_adr3-flgdefault
-                      kind       = 'F'
-                      value      = COND #( WHEN ls_adr3-faxnr_long IS NOT INITIAL
-                                           THEN ls_adr3-faxnr_long ELSE ls_adr3-fax_number ) )
-             TO mt_comm.
-    ENDLOOP.
-
-    SELECT addrnumber, consnumber, flgdefault, smtp_addr
-      FROM adr6
-      FOR ALL ENTRIES IN @lt_adrnr
-      WHERE addrnumber = @lt_adrnr-table_line
-        AND persnumber = @space
-      INTO TABLE @DATA(lt_adr6).
-
-    LOOP AT lt_adr6 INTO DATA(ls_adr6).
-      APPEND VALUE #( addrnumber = ls_adr6-addrnumber
-                      consnumber = ls_adr6-consnumber
-                      flgdefault = ls_adr6-flgdefault
-                      kind       = 'E'
-                      value      = ls_adr6-smtp_addr )
-             TO mt_comm.
-    ENDLOOP.
-
-    DELETE mt_comm WHERE value IS INITIAL.
-    " Default entry first, then by sequence number
-    SORT mt_comm BY addrnumber kind flgdefault DESCENDING consnumber.
+    rs_partner = VALUE #( kunnr = ls_hit-kunn2
+                          adrnr = VALUE #( mt_kna1[ id = ls_hit-kunn2 ]-adrnr OPTIONAL ) ).
 
   ENDMETHOD.
 
 
   METHOD determine_form.
 
-    " FS: "If notifier party details are maintained in the Z table, then
-    " user have to select ... Packing list with notifier party"
-    " (ASSUMPTION A05: chosen automatically unless the user overrides).
+    " FS 1.1: format with notify party when notify parties are maintained
+    " (A05). A manual "without" while notify parties exist is an error.
+    ev_np_count = 0.
+    DO zif_sd_epack=>gc_max_np TIMES.
+      ASSIGN COMPONENT |ZSD_NP{ sy-index }| OF STRUCTURE is_header TO FIELD-SYMBOL(<lv_np>).
+      IF sy-subrc = 0 AND <lv_np> IS NOT INITIAL.
+        ev_np_count += 1.
+      ENDIF.
+    ENDDO.
+
     CASE iv_format.
       WHEN zif_sd_epack=>gc_format-with_np.
         rv_form = zif_sd_epack=>gc_form-with_np.
       WHEN zif_sd_epack=>gc_format-without_np.
-        IF iv_np_count > 0.
-          add( iv_no = '013' iv_v1 = ms_pl-header-zsd_packno ).
+        IF ev_np_count > 0.
+          add( iv_no = '013' iv_v1 = is_header-zsd_packno ).
         ENDIF.
         rv_form = zif_sd_epack=>gc_form-without_np.
       WHEN OTHERS.
-        rv_form = COND #( WHEN iv_np_count > 0
-                          THEN zif_sd_epack=>gc_form-with_np
-                          ELSE zif_sd_epack=>gc_form-without_np ).
+        rv_form = COND #( WHEN ev_np_count > 0 THEN zif_sd_epack=>gc_form-with_np
+                                               ELSE zif_sd_epack=>gc_form-without_np ).
     ENDCASE.
+
+  ENDMETHOD.
+
+
+  METHOD goods_lines.
+
+    " Uploaded "Description of goods" (template column AG, field
+    " ZSD_HSN_DESC - "Same HSN having different description") is used
+    " when filled (A14 / Q05) ...
+    rt_lines = zcl_sd_epack_rules=>split_lines( is_pl-header-zsd_hsn_desc ).
+    IF rt_lines IS NOT INITIAL.
+      RETURN.
+    ENDIF.
+
+    " ... otherwise logic B42: VBRP-MATNR -> MARC-STEUC -> T604N-TEXT1,
+    " "club common HSN code and description in all billing documents"
+    DATA lt_seen TYPE SORTED TABLE OF steuc WITH UNIQUE KEY table_line.
+
+    LOOP AT it_vbrp INTO DATA(ls_vbrp) WHERE matnr IS NOT INITIAL.
+      DATA(lv_steuc) = VALUE steuc( mt_marc[ matnr = ls_vbrp-matnr werks = ls_vbrp-werks ]-steuc OPTIONAL ).
+      IF lv_steuc IS INITIAL.
+        CONTINUE.
+      ENDIF.
+      INSERT lv_steuc INTO TABLE lt_seen.
+      IF sy-subrc <> 0.
+        CONTINUE.                         " HSN already clubbed
+      ENDIF.
+      DATA(lv_text) = VALUE t604n-text1( mt_t604n[ steuc = lv_steuc ]-text1 OPTIONAL ).
+      APPEND COND string( WHEN lv_text IS INITIAL
+                          THEN |HS CODE : { zcl_sd_epack_rules=>format_hsn( lv_steuc ) }|
+                          ELSE |{ lv_text } - HS CODE : { zcl_sd_epack_rules=>format_hsn( lv_steuc ) }| )
+             TO rt_lines.
+    ENDLOOP.
 
   ENDMETHOD.
 
 
   METHOD resolve_items.
 
-    " FS #27 / logic B54, B58: description and HSN "from Z table OR
-    " material master". Z value wins when filled (ASSUMPTION A12).
-    TYPES: BEGIN OF ty_mat,
-             matnr TYPE matnr,
-           END OF ty_mat.
-    DATA lt_mat  TYPE SORTED TABLE OF ty_mat WITH UNIQUE KEY matnr.
-    DATA lt_steuc TYPE SORTED TABLE OF steuc WITH UNIQUE KEY table_line.
-    DATA lt_goods TYPE zif_sd_epack=>tt_text_line.
-
-    et_items = ms_pl-items.
-
-    LOOP AT et_items INTO DATA(ls_item).
-      INSERT VALUE #( matnr = to_matnr( ls_item-zsd_partno ) ) INTO TABLE lt_mat.
-    ENDLOOP.
-    DELETE lt_mat WHERE matnr IS INITIAL.
-
-    IF lt_mat IS NOT INITIAL.
-      SELECT matnr, maktx FROM makt
-        FOR ALL ENTRIES IN @lt_mat
-        WHERE matnr = @lt_mat-matnr
-          AND spras = @zif_sd_epack=>gc_langu
-        INTO TABLE @DATA(lt_makt).
-      SORT lt_makt BY matnr.
-
-      SELECT matnr, werks, steuc FROM marc
-        FOR ALL ENTRIES IN @lt_mat
-        WHERE matnr = @lt_mat-matnr
-        INTO TABLE @DATA(lt_marc).
-      SORT lt_marc BY matnr werks.
-    ENDIF.
+    et_items = is_pl-items.
 
     LOOP AT et_items ASSIGNING FIELD-SYMBOL(<ls_item>).
-      DATA(lv_matnr) = to_matnr( <ls_item>-zsd_partno ).
 
-      IF lv_matnr IS NOT INITIAL AND NOT line_exists( mt_vbrp[ matnr = lv_matnr ] ).
-        add( iv_type = 'W' iv_no = '030' iv_v1 = |{ CONV i( <ls_item>-zsd_sn ) }| iv_v2 = <ls_item>-zsd_partno ).
+      DATA(lv_sn)    = |{ CONV i( <ls_item>-zsd_sn ) }|.
+      DATA(lv_matnr) = VALUE matnr( mt_matnr[ partno = <ls_item>-zsd_partno ]-matnr OPTIONAL ).
+
+      " Plant of the material in this packing list's invoices
+      DATA(lv_werks) = VALUE werks_d( ).
+      LOOP AT it_vbrp INTO DATA(ls_vbrp) WHERE matnr = lv_matnr.
+        lv_werks = ls_vbrp-werks.
+        EXIT.
+      ENDLOOP.
+      IF lv_werks IS INITIAL.
+        " Reconciliation hint only - not a logic-sheet rule
+        add( iv_type = 'W' iv_no = '030' iv_v1 = lv_sn iv_v2 = <ls_item>-zsd_partno ).
       ENDIF.
 
+      " Logic B54: ZSD_MATDESC OR material text
       IF <ls_item>-zsd_matdesc IS INITIAL.
-        READ TABLE lt_makt INTO DATA(ls_makt) WITH KEY matnr = lv_matnr BINARY SEARCH.
-        IF sy-subrc = 0.
-          <ls_item>-zsd_matdesc = ls_makt-maktx.
-        ELSE.
-          add( iv_type = 'W' iv_no = '048' iv_v1 = |{ CONV i( <ls_item>-zsd_sn ) }| ).
+        <ls_item>-zsd_matdesc = VALUE #( mt_makt[ matnr = lv_matnr ]-maktx OPTIONAL ).
+        IF <ls_item>-zsd_matdesc IS INITIAL.
+          add( iv_type = 'W' iv_no = '048' iv_v1 = lv_sn ).
         ENDIF.
       ENDIF.
 
+      " Logic B58: ZSD_HSN OR MARC-STEUC of the Part No. (step 53)
       IF <ls_item>-zsd_hsn IS INITIAL.
-        " HSN of the billing plant (FS logic B42: MARC-STEUC)
-        DATA(lv_werks) = VALUE werks_d( mt_vbrp[ matnr = lv_matnr ]-werks OPTIONAL ).
-        READ TABLE lt_marc INTO DATA(ls_marc) WITH KEY matnr = lv_matnr werks = lv_werks BINARY SEARCH.
-        IF sy-subrc = 0 AND ls_marc-steuc IS NOT INITIAL.
-          <ls_item>-zsd_hsn = ls_marc-steuc.
-        ELSE.
-          add( iv_type = 'W' iv_no = '044' iv_v1 = |{ CONV i( <ls_item>-zsd_sn ) }| ).
+        <ls_item>-zsd_hsn = VALUE #( mt_marc[ matnr = lv_matnr werks = lv_werks ]-steuc OPTIONAL ).
+        IF <ls_item>-zsd_hsn IS INITIAL.
+          add( iv_type = 'W' iv_no = '044' iv_v1 = lv_sn ).
         ENDIF.
       ENDIF.
-
       <ls_item>-zsd_hsn = zcl_sd_epack_rules=>format_hsn( <ls_item>-zsd_hsn ).
-      IF <ls_item>-zsd_hsn IS NOT INITIAL.
-        INSERT CONV steuc( replace( val = <ls_item>-zsd_hsn sub = ` ` with = `` occ = 0 ) )
-               INTO TABLE lt_steuc.
-      ENDIF.
+
     ENDLOOP.
 
-    " HSN texts (logic B42: T604N with SPRAS = EN, LAND1 = IN)
-    IF lt_steuc IS NOT INITIAL.
-      SELECT steuc, text1 FROM t604n
-        FOR ALL ENTRIES IN @lt_steuc
-        WHERE spras = @zif_sd_epack=>gc_langu
-          AND land1 = @zif_sd_epack=>gc_hsn_country
-          AND steuc = @lt_steuc-table_line
-        INTO TABLE @DATA(lt_t604n).
-    ENDIF.
-
-    lt_goods = zcl_sd_epack_rules=>split_lines( ms_pl-header-zsd_hsn_desc ).
-
-    " Section headings in order of first appearance; "club common HSN
-    " code and description in all billing documents" (logic B42)
-    LOOP AT et_items INTO ls_item.
+    " Section heading per HSN, in order of first appearance
+    LOOP AT et_items INTO DATA(ls_item).
       IF line_exists( et_headings[ hsn = ls_item-zsd_hsn ] ).
         CONTINUE.
       ENDIF.
-      DATA(lv_steuc) = CONV steuc( replace( val = ls_item-zsd_hsn sub = ` ` with = `` occ = 0 ) ).
       APPEND VALUE #( hsn  = ls_item-zsd_hsn
                       text = zcl_sd_epack_rules=>heading_for_hsn(
                                iv_hsn         = ls_item-zsd_hsn
-                               it_goods_lines = lt_goods
-                               iv_hsn_text    = CONV #( VALUE t604n-text1( lt_t604n[ steuc = lv_steuc ]-text1 OPTIONAL ) ) ) )
+                               it_goods_lines = it_goods
+                               iv_hsn_text    = CONV #( VALUE t604n-text1(
+                                                  mt_t604n[ steuc = steuc_of( ls_item-zsd_hsn ) ]-text1 OPTIONAL ) ) ) )
              TO et_headings.
     ENDLOOP.
 
   ENDMETHOD.
 
 
-  METHOD build_header.
-
-    DATA(ls_hdr)  = ms_pl-header.
-    DATA(ls_vbrk) = mt_vbrk[ 1 ].
-
-    rs_header-packno     = ls_hdr-zsd_packno.
-    rs_header-packdt_txt = zcl_sd_epack_rules=>format_date( ls_hdr-zsd_packdt ).
-    rs_header-revno      = ls_hdr-zsd_revno.
-
-    " Exporter's Ref. / IEC: Excel value if given, else company address
-    " field BUILDING (logic B11) - ASSUMPTION A13
-    rs_header-iec = COND #( WHEN ls_hdr-zsd_expref IS NOT INITIAL
-                            THEN ls_hdr-zsd_expref
-                            ELSE VALUE #( mt_address[ addrnumber = mv_company_adrnr ]-building OPTIONAL ) ).
-    IF rs_header-iec IS INITIAL.
-      add( iv_type = 'W' iv_no = '049' iv_v1 = 'IEC (Exporter''s Ref.)' ).
-    ELSEIF rs_header-iec NS 'IEC'.
-      rs_header-iec = |IEC:{ rs_header-iec }|.
-    ENDIF.
-
-    " GST No. (logic B6) - business place of the invoices
-    SELECT SINGLE gstin FROM j_1bbranch
-      WHERE bukrs  = @ls_vbrk-bukrs
-        AND branch = @ls_vbrk-bupla
-      INTO @rs_header-gstin.
-    mv_gstin = rs_header-gstin.
-    IF rs_header-gstin IS INITIAL.
-      add( iv_type = 'W' iv_no = '049' iv_v1 = 'GST No.' ).
-    ENDIF.
-
-    " CIN (logic B7)
-    SELECT SINGLE paval FROM t001z
-      WHERE bukrs = @ls_vbrk-bukrs
-        AND party = @zif_sd_epack=>gc_cin_party
-      INTO @rs_header-cin.
-    IF rs_header-cin IS INITIAL.
-      add( iv_type = 'W' iv_no = '049' iv_v1 = 'CIN No.' ).
-    ENDIF.
-
-    rs_header-cnty_orgn = ls_hdr-zsd_cnty_orgn.
-    rs_header-cnty_dest = country_text(
-                            VALUE #( mt_address[ addrnumber = ms_ship_to-adrnr ]-country OPTIONAL ) ).
-    rs_header-same_party = xsdbool( ms_sold_to-kunnr = ms_ship_to-kunnr ).
-
-    rs_header-prec    = ls_hdr-zsd_prec.
-    rs_header-rec_pc  = ls_hdr-zsd_rec_pc.
-    rs_header-vsl_flt = ls_hdr-zsd_vsl_flt.
-    rs_header-pol     = ls_hdr-zsd_pol.
-    rs_header-pod     = ls_hdr-zsd_pod.
-    rs_header-pld     = ls_hdr-zsd_pld.
-
-    rs_header-tot_art_txt = |{ is_totals-articles }|.
-    rs_header-tot_qty_txt = zcl_sd_epack_rules=>format_quantity( is_totals-quantity ).
-    rs_header-tot_gwt_txt = zcl_sd_epack_rules=>format_weight( is_totals-gross ).
-    rs_header-tot_nwt_txt = zcl_sd_epack_rules=>format_weight( is_totals-net ).
-    rs_header-tot_text    = |({ zcl_sd_epack_rules=>total_text( is_totals ) })|.
-
-  ENDMETHOD.
-
-
-  METHOD build_texts.
-
-    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-exporter
-                            it_lines = exporter_lines( )
-                  CHANGING  ct_texts = rt_texts ).
-
-    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-sold_to
-                            it_lines = party_lines( ms_sold_to )
-                  CHANGING  ct_texts = rt_texts ).
-
-    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-ship_to
-                            it_lines = party_lines( is_party       = ms_ship_to
-                                                    iv_with_tax_no = abap_true )
-                  CHANGING  ct_texts = rt_texts ).
-
-    DATA(lv_np) = 0.
-    DO zif_sd_epack=>gc_max_np TIMES.
-      lv_np = sy-index.
-      ASSIGN COMPONENT |ZSD_NP{ lv_np }| OF STRUCTURE ms_pl-header TO FIELD-SYMBOL(<lv_np>).
-      IF sy-subrc = 0.
-        append_block( EXPORTING iv_block = CONV #( |NP{ lv_np }| )
-                                it_lines = zcl_sd_epack_rules=>split_lines( <lv_np> )
-                      CHANGING  ct_texts = rt_texts ).
-      ENDIF.
-    ENDDO.
-
-    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-order_ref
-                            it_lines = order_reference( )
-                  CHANGING  ct_texts = rt_texts ).
-
-    DATA(lv_buyer_ref) = condense( CONV string( ms_pl-header-zsd_party_ref ) ).
-    IF ms_pl-header-zsd_ref_dt IS NOT INITIAL.
-      lv_buyer_ref = |{ lv_buyer_ref } DATE: { zcl_sd_epack_rules=>format_date( ms_pl-header-zsd_ref_dt ) }|.
-    ENDIF.
-    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-buyer_ref
-                            it_lines = zcl_sd_epack_rules=>split_lines( lv_buyer_ref )
-                  CHANGING  ct_texts = rt_texts ).
-
-    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-payment
-                            it_lines = payment_lines( )
-                  CHANGING  ct_texts = rt_texts ).
-
-    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-marks
-                            it_lines = zcl_sd_epack_rules=>split_lines( ms_pl-header-zsd_mark )
-                  CHANGING  ct_texts = rt_texts ).
-
-    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-container
-                            it_lines = zcl_sd_epack_rules=>split_lines( ms_pl-header-zsd_cont )
-                  CHANGING  ct_texts = rt_texts ).
-
-    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-packages
-                            it_lines = zcl_sd_epack_rules=>split_lines( ms_pl-header-zsd_nopack )
-                  CHANGING  ct_texts = rt_texts ).
-
-    " Description of Goods: uploaded text, otherwise the clubbed HSN
-    " headings (ASSUMPTION A14)
-    DATA(lt_goods) = zcl_sd_epack_rules=>split_lines( ms_pl-header-zsd_hsn_desc ).
-    IF lt_goods IS INITIAL.
-      lt_goods = VALUE #( FOR ls_heading IN it_headings ( ls_heading-text ) ).
-    ENDIF.
-    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-goods
-                            it_lines = lt_goods
-                  CHANGING  ct_texts = rt_texts ).
-
-    append_block( EXPORTING iv_block = zif_sd_epack=>gc_block-declaration
-                            it_lines = zcl_sd_epack_rules=>split_lines( ms_pl-header-zsd_pl_decl )
-                  CHANGING  ct_texts = rt_texts ).
-
-  ENDMETHOD.
-
-
-  METHOD exporter_lines.
-
-    " Layout of the samples:
-    "   ASTRAL LIMITED.
-    "   207/1, ASTRAL HOUSE, B/H RAJPATH CLUB,
-    "   OFF. S. G. HIGHWAY,
-    "   AHMEDABAD - 380 059, GUJARAT, INDIA.
-    "   GST NO. 24AABCA2951N1ZO
-    DATA(ls_adr) = VALUE ty_address( mt_address[ addrnumber = mv_company_adrnr ] OPTIONAL ).
-    IF ls_adr IS INITIAL.
-      add( iv_type = 'W' iv_no = '049' iv_v1 = 'Exporter address' ).
-      RETURN.
-    ENDIF.
-
-    APPEND condense( |{ ls_adr-name1 } { ls_adr-name2 }| ) TO rt_lines.
-    APPEND CONV string( ls_adr-street )     TO rt_lines.
-    APPEND CONV string( ls_adr-str_suppl1 ) TO rt_lines.
-    APPEND CONV string( ls_adr-str_suppl2 ) TO rt_lines.
-    APPEND join( VALUE #( ( condense( |{ ls_adr-city1 }{ COND string( WHEN ls_adr-post_code1 IS NOT INITIAL
-                                                                         THEN | - { ls_adr-post_code1 }| ) }| ) )
-                          ( region_text( iv_land1 = ls_adr-country iv_region = ls_adr-region ) )
-                          ( country_text( ls_adr-country ) ) ) ) TO rt_lines.
-
-    " GSTIN was read in BUILD_HEADER (called before BUILD_TEXTS)
-    IF mv_gstin IS NOT INITIAL.
-      APPEND |GST NO. { mv_gstin }| TO rt_lines.
-    ENDIF.
-
-    DELETE rt_lines WHERE table_line IS INITIAL.
-
-  ENDMETHOD.
-
-
-  METHOD party_lines.
-
-    " Layout of sample 90000081:
-    "   NAME
-    "   STREET, SUPPLEMENT, DISTRICT, POSTCODE CITY, REGION, COUNTRY
-    "   K/A:- CONTACT                        (ADRC-NAME_CO, ASSUMPTION A15)
-    "   TEL.: ... FAX : ... MO : ...
-    "   E-MAIL : ...
-    "   TAX NUMBER : ...                     (ship-to only, ASSUMPTION A16)
-    DATA(ls_adr) = VALUE ty_address( mt_address[ addrnumber = is_party-adrnr ] OPTIONAL ).
-    IF ls_adr IS INITIAL.
-      add( iv_type = 'W' iv_no = '049' iv_v1 = |Address of customer { is_party-kunnr ALPHA = OUT }| ).
-      RETURN.
-    ENDIF.
-
-    APPEND condense( |{ ls_adr-name1 } { ls_adr-name2 }| ) TO rt_lines.
-    APPEND join( VALUE #( ( CONV #( ls_adr-street ) )
-                          ( CONV #( ls_adr-str_suppl1 ) )
-                          ( CONV #( ls_adr-str_suppl2 ) )
-                          ( CONV #( ls_adr-city2 ) )
-                          ( condense( |{ ls_adr-post_code1 } { ls_adr-city1 }| ) )
-                          ( region_text( iv_land1 = ls_adr-country iv_region = ls_adr-region ) )
-                          ( country_text( ls_adr-country ) ) ) ) TO rt_lines.
-
-    IF ls_adr-name_co IS NOT INITIAL.
-      APPEND |K/A:- { ls_adr-name_co }| TO rt_lines.
-    ENDIF.
-
-    " Logic B22/B23: R3_USER = 1 telephone, R3_USER = 3 mobile
-    DATA(lv_tel) = comm_value( iv_adrnr = is_party-adrnr iv_kind = 'T' iv_r3_user = '1' ).
-    DATA(lv_mob) = comm_value( iv_adrnr = is_party-adrnr iv_kind = 'M' iv_r3_user = '3' ).
-    DATA(lv_fax) = comm_value( iv_adrnr = is_party-adrnr iv_kind = 'F' ).
-    APPEND join( it_parts = VALUE #( ( COND #( WHEN lv_tel IS NOT INITIAL THEN |TEL.: { lv_tel }| ) )
-                                     ( COND #( WHEN lv_fax IS NOT INITIAL THEN |FAX : { lv_fax }| ) )
-                                     ( COND #( WHEN lv_mob IS NOT INITIAL THEN |MO : { lv_mob }| ) ) )
-                 iv_sep   = ` ` ) TO rt_lines.
-
-    DATA(lv_mail) = comm_value( iv_adrnr = is_party-adrnr iv_kind = 'E' ).
-    IF lv_mail IS NOT INITIAL.
-      APPEND |E-MAIL : { lv_mail }| TO rt_lines.
-    ENDIF.
-
-    IF iv_with_tax_no = abap_true AND is_party-stcd1 IS NOT INITIAL.
-      APPEND |TAX NUMBER : { is_party-stcd1 }| TO rt_lines.
-    ENDIF.
-
-    DELETE rt_lines WHERE table_line IS INITIAL.
-
-  ENDMETHOD.
-
-
   METHOD order_reference.
 
-    " FS #8 / logic B13: customer reference + date of the QUOTATION the
-    " sales orders were created from. Several orders -> joined with " & "
-    " as on sample 90000014 (ASSUMPTION A17).
-    TYPES: BEGIN OF ty_doc,
-             vbeln TYPE vbeln,
-           END OF ty_doc.
-    DATA lt_so  TYPE SORTED TABLE OF ty_doc WITH UNIQUE KEY vbeln.
-    DATA lt_ref TYPE SORTED TABLE OF ty_doc WITH UNIQUE KEY vbeln.
+    " Logic B13: VBRP-AUBEL -> VBAK-VGBEL (quotation) -> VBKD-BSTKD / BSTDK
+    " ("Quotation - Customer reference and date"). Several orders of the
+    " packing list: all distinct references, joined with " & " (A17 / Q06).
     DATA lt_bstkd TYPE string_table.
     DATA lt_bstdk TYPE string_table.
+    DATA lt_seen  TYPE SORTED TABLE OF vbeln WITH UNIQUE KEY table_line.
 
-    LOOP AT mt_vbrp INTO DATA(ls_vbrp) WHERE aubel IS NOT INITIAL.
-      INSERT VALUE #( vbeln = ls_vbrp-aubel ) INTO TABLE lt_so.
-    ENDLOOP.
-    IF lt_so IS INITIAL.
-      RETURN.
-    ENDIF.
+    LOOP AT it_vbrp INTO DATA(ls_vbrp) WHERE aubel IS NOT INITIAL.
+      INSERT ls_vbrp-aubel INTO TABLE lt_seen.
+      IF sy-subrc <> 0.
+        CONTINUE.
+      ENDIF.
 
-    SELECT vbeln, vgbel, vgtyp FROM vbak
-      FOR ALL ENTRIES IN @lt_so
-      WHERE vbeln = @lt_so-vbeln
-      INTO TABLE @DATA(lt_vbak).
+      DATA(lv_vgbel) = VALUE vbeln( mt_vbak[ vbeln = ls_vbrp-aubel ]-vgbel OPTIONAL ).
+      IF lv_vgbel IS INITIAL.
+        add( iv_type = 'W' iv_no = '061' iv_v1 = |{ ls_vbrp-aubel ALPHA = OUT }| ).
+        CONTINUE.
+      ENDIF.
 
-    " Quotation (VBTYP 'B') if the order was created with reference to
-    " one, otherwise the order itself
-    LOOP AT lt_vbak INTO DATA(ls_vbak).
-      INSERT VALUE #( vbeln = COND #( WHEN ls_vbak-vgbel IS NOT INITIAL AND ls_vbak-vgtyp = 'B'
-                                      THEN ls_vbak-vgbel ELSE ls_vbak-vbeln ) )
-             INTO TABLE lt_ref.
-    ENDLOOP.
+      READ TABLE mt_vbkd INTO DATA(ls_vbkd) WITH TABLE KEY vbeln = lv_vgbel.
+      IF sy-subrc <> 0.
+        CONTINUE.
+      ENDIF.
 
-    SELECT vbeln, bstkd, bstdk FROM vbkd
-      FOR ALL ENTRIES IN @lt_ref
-      WHERE vbeln = @lt_ref-vbeln
-        AND posnr = '000000'
-      INTO TABLE @DATA(lt_vbkd).
-    SORT lt_vbkd BY vbeln.
-
-    LOOP AT lt_vbkd INTO DATA(ls_vbkd).
       DATA(lv_bstkd) = condense( CONV string( ls_vbkd-bstkd ) ).
       IF lv_bstkd IS NOT INITIAL AND NOT line_exists( lt_bstkd[ table_line = lv_bstkd ] ).
         APPEND lv_bstkd TO lt_bstkd.
@@ -1072,79 +1225,111 @@ CLASS zcl_sd_epack_data IMPLEMENTATION.
   ENDMETHOD.
 
 
-  METHOD payment_lines.
+  METHOD exporter_lines.
 
-    DATA(ls_vbrk) = mt_vbrk[ 1 ].
+    " Logic B3-B5: NAME1, STREET, STR_SUPPL1, CITY1, POST_CODE1,
+    " REGION (text), COUNTRY (text); B6 GST No. as in the samples
+    DATA(ls_adr) = VALUE ty_adrc( mt_adrc[ addrnumber = iv_adrnr ] OPTIONAL ).
+    IF ls_adr IS INITIAL.
+      add( iv_type = 'W' iv_no = '049' iv_v1 = 'Exporter address' ).
+      RETURN.
+    ENDIF.
 
-    " Logic B43: TVZBT-VTEXT (first day-limit entry)
-    SELECT vtext FROM tvzbt
-      WHERE spras = @zif_sd_epack=>gc_langu
-        AND zterm = @ls_vbrk-zterm
-      ORDER BY ztagg
-      INTO @DATA(lv_vtext)
-      UP TO 1 ROWS.
-    ENDSELECT.
+    rt_lines = VALUE #(
+      ( CONV #( ls_adr-name1 ) )
+      ( CONV #( ls_adr-street ) )
+      ( CONV #( ls_adr-str_suppl1 ) )
+      ( join( VALUE #( ( condense( |{ ls_adr-city1 }{ COND string( WHEN ls_adr-post_code1 IS NOT INITIAL
+                                                                    THEN | - { ls_adr-post_code1 }| ) }| ) )
+                       ( to_upper( VALUE t005u-bezei( mt_t005u[ land1 = ls_adr-country bland = ls_adr-region ]-bezei OPTIONAL ) ) )
+                       ( country_text( ls_adr-country ) ) ) ) ) ).
 
-    " Logic B44: Incoterms 1 + 2; description from TINCT (ASSUMPTION A18)
-    SELECT SINGLE bezei FROM tinct
-      WHERE spras = @zif_sd_epack=>gc_langu
-        AND inco1 = @ls_vbrk-inco1
-      INTO @DATA(lv_inco_text).
+    IF iv_gstin IS NOT INITIAL.
+      APPEND |GST NO. { iv_gstin }| TO rt_lines.
+    ENDIF.
 
-    APPEND |PAYMENT TERM: { COND string( WHEN lv_vtext IS NOT INITIAL THEN lv_vtext ELSE ls_vbrk-zterm ) }|
-           TO rt_lines.
-    APPEND condense( |TERMS OF SHIPMENT :- {
-                       COND string( WHEN lv_inco_text IS NOT INITIAL THEN to_upper( lv_inco_text )
-                                    ELSE ls_vbrk-inco1 ) } { ls_vbrk-inco2 }| )
-           TO rt_lines.
+    DELETE rt_lines WHERE table_line IS INITIAL.
 
   ENDMETHOD.
 
 
-  METHOD comm_value.
+  METHOD party_lines.
 
-    " Preferred: the requested R3_USER flag; otherwise default / first entry
-    IF iv_r3_user IS NOT INITIAL.
-      LOOP AT mt_comm INTO DATA(ls_comm)
-           WHERE addrnumber = iv_adrnr AND kind = iv_kind AND r3_user = iv_r3_user.
-        rv_value = ls_comm-value.
-        RETURN.
-      ENDLOOP.
+    " Logic B20-B23 / B26-B29: NAME1, STREET, STR_SUPPL1, CITY1, CITY2,
+    " POST_CODE1, COUNTRY (text); e-mail; telephone (R3_USER 1) and
+    " mobile (R3_USER 3)
+    DATA(ls_adr) = VALUE ty_adrc( mt_adrc[ addrnumber = is_partner-adrnr ] OPTIONAL ).
+    IF ls_adr IS INITIAL.
+      IF is_partner-kunnr IS NOT INITIAL.
+        add( iv_type = 'W' iv_no = '049' iv_v1 = |Address of customer { is_partner-kunnr ALPHA = OUT }| ).
+      ENDIF.
+      RETURN.
     ENDIF.
 
-    LOOP AT mt_comm INTO ls_comm WHERE addrnumber = iv_adrnr AND kind = iv_kind.
-      rv_value = ls_comm-value.
-      RETURN.
+    APPEND CONV string( ls_adr-name1 ) TO rt_lines.
+    APPEND join( VALUE #( ( CONV #( ls_adr-street ) )
+                          ( CONV #( ls_adr-str_suppl1 ) )
+                          ( CONV #( ls_adr-city2 ) )
+                          ( condense( |{ ls_adr-post_code1 } { ls_adr-city1 }| ) )
+                          ( country_text( ls_adr-country ) ) ) ) TO rt_lines.
+
+    " Default number first, then the lowest sequence number (A30)
+    DATA lv_tel  TYPE string.
+    DATA lv_mob  TYPE string.
+    DATA lv_mail TYPE string.
+    LOOP AT mt_adr2 INTO DATA(ls_adr2) WHERE addrnumber = is_partner-adrnr.
+      CASE ls_adr2-r3_user.
+        WHEN '1'.
+          IF lv_tel IS INITIAL OR ls_adr2-flgdefault = abap_true.
+            lv_tel = ls_adr2-telnr_long.
+          ENDIF.
+        WHEN '3'.
+          IF lv_mob IS INITIAL OR ls_adr2-flgdefault = abap_true.
+            lv_mob = ls_adr2-telnr_long.
+          ENDIF.
+      ENDCASE.
     ENDLOOP.
+    LOOP AT mt_adr6 INTO DATA(ls_adr6) WHERE addrnumber = is_partner-adrnr.
+      IF lv_mail IS INITIAL OR ls_adr6-flgdefault = abap_true.
+        lv_mail = ls_adr6-smtp_addr.
+      ENDIF.
+    ENDLOOP.
+
+    APPEND join( it_parts = VALUE #( ( COND #( WHEN lv_tel IS NOT INITIAL THEN |TEL.: { lv_tel }| ) )
+                                     ( COND #( WHEN lv_mob IS NOT INITIAL THEN |MO : { lv_mob }| ) ) )
+                 iv_sep   = ` ` ) TO rt_lines.
+    IF lv_mail IS NOT INITIAL.
+      APPEND |E-MAIL : { lv_mail }| TO rt_lines.
+    ENDIF.
+
+    DELETE rt_lines WHERE table_line IS INITIAL.
 
   ENDMETHOD.
 
 
   METHOD country_text.
-
     IF iv_land1 IS INITIAL.
       RETURN.
     ENDIF.
-    SELECT SINGLE landx FROM t005t
-      WHERE spras = @zif_sd_epack=>gc_langu
-        AND land1 = @iv_land1
-      INTO @DATA(lv_landx).
-    rv_text = COND #( WHEN sy-subrc = 0 THEN to_upper( lv_landx ) ELSE iv_land1 ).
-
+    DATA(lv_landx) = VALUE t005t-landx( mt_t005t[ land1 = iv_land1 ]-landx OPTIONAL ).
+    rv_text = COND #( WHEN lv_landx IS NOT INITIAL THEN to_upper( lv_landx ) ELSE iv_land1 ).
   ENDMETHOD.
 
 
-  METHOD region_text.
+  METHOD matnr_of.
 
-    IF iv_region IS INITIAL.
-      RETURN.
+    " Part No. = SAP material number (logic B58 "from STEP no 53" = Part No.)
+    CALL FUNCTION 'CONVERSION_EXIT_MATN1_INPUT'
+      EXPORTING
+        input        = iv_partno
+      IMPORTING
+        output       = rv_matnr
+      EXCEPTIONS
+        length_error = 1
+        OTHERS       = 2.
+    IF sy-subrc <> 0.
+      CLEAR rv_matnr.
     ENDIF.
-    SELECT SINGLE bezei FROM t005u
-      WHERE spras = @zif_sd_epack=>gc_langu
-        AND land1 = @iv_land1
-        AND bland = @iv_region
-      INTO @DATA(lv_bezei).
-    rv_text = COND #( WHEN sy-subrc = 0 THEN to_upper( lv_bezei ) ELSE iv_region ).
 
   ENDMETHOD.
 
@@ -1164,8 +1349,8 @@ CLASS zcl_sd_epack_data IMPLEMENTATION.
 
   METHOD append_block.
 
-    " Lines longer than the text field are split; the form wraps text
-    " at the window width anyway.
+    " Lines longer than the text field are split; the form wraps text at
+    " the window width anyway.
     DATA lv_line_no TYPE zsd_s_epack_prt_txt-line_no.
     DATA lv_rest    TYPE string.
     CONSTANTS lc_len TYPE i VALUE 255.
@@ -1187,24 +1372,8 @@ CLASS zcl_sd_epack_data IMPLEMENTATION.
   ENDMETHOD.
 
 
-  METHOD to_matnr.
-
-    " Part No. = SAP material number (ASSUMPTION A12)
-    IF iv_partno IS INITIAL.
-      RETURN.
-    ENDIF.
-    CALL FUNCTION 'CONVERSION_EXIT_MATN1_INPUT'
-      EXPORTING
-        input        = iv_partno
-      IMPORTING
-        output       = rv_matnr
-      EXCEPTIONS
-        length_error = 1
-        OTHERS       = 2.
-    IF sy-subrc <> 0.
-      CLEAR rv_matnr.
-    ENDIF.
-
+  METHOD steuc_of.
+    rv_steuc = replace( val = condense( CONV string( iv_hsn ) ) sub = ` ` with = `` occ = 0 ).
   ENDMETHOD.
 
 ENDCLASS.

@@ -77,13 +77,6 @@ INTERFACE zif_sd_epack
       pdf     TYPE char1 VALUE 'F',
     END OF gc_output.
 
-  CONSTANTS:
-    BEGIN OF gc_upload_mode,
-      create    TYPE char1 VALUE 'C',
-      overwrite TYPE char1 VALUE 'O',
-      delete    TYPE char1 VALUE 'D',
-    END OF gc_upload_mode.
-
   "! Row types of the printed item table (ZSD_S_EPACK_PRT_ITM-ROW_TYPE)
   CONSTANTS:
     BEGIN OF gc_row_type,
@@ -115,6 +108,21 @@ INTERFACE zif_sd_epack
       declaration TYPE zsd_epack_block VALUE 'DECL',
     END OF gc_block.
 
+  "! Processing status per packing list (log table ZSD_EPACK_LOG)
+  CONSTANTS:
+    BEGIN OF gc_status,
+      success TYPE zsd_epack_status VALUE 'S',
+      warning TYPE zsd_epack_status VALUE 'W',
+      error   TYPE zsd_epack_status VALUE 'E',
+    END OF gc_status.
+
+  "! Data source of a run
+  CONSTANTS:
+    BEGIN OF gc_source,
+      excel TYPE char1 VALUE 'U',
+      saved TYPE char1 VALUE 'R',
+    END OF gc_source.
+
   "! Maximum number of notify parties - FS: "up to five notifier parties"
   CONSTANTS gc_max_np TYPE i VALUE 5.
 
@@ -123,13 +131,21 @@ INTERFACE zif_sd_epack
   TYPES tt_item  TYPE STANDARD TABLE OF zsd_epack_data WITH DEFAULT KEY.
   TYPES tt_text_line TYPE STANDARD TABLE OF string WITH EMPTY KEY.
 
-  "! One packing list as stored in the three Z tables
+  "! One packing list: header, its invoices and its line items, plus the
+  "! messages raised for exactly this packing list. Header and items are
+  "! always kept together under the packing list number - nothing is
+  "! shared between packing lists.
   TYPES:
     BEGIN OF ts_packing_list,
+      packno   TYPE zsd_packno,
       header   TYPE zsd_epack_hdr,
       invoices TYPE tt_vbeln,
       items    TYPE tt_item,
-    END OF ts_packing_list.
+      "! Excel rows that belong to this packing list (for messages / log)
+      rows     TYPE string,
+      messages TYPE bapiret2_t,
+    END OF ts_packing_list,
+    tt_packing_list TYPE SORTED TABLE OF ts_packing_list WITH UNIQUE KEY packno.
 
   "! Everything handed to the Smart Form
   TYPES:
@@ -139,6 +155,25 @@ INTERFACE zif_sd_epack
       texts  TYPE zsd_tt_epack_prt_txt,
       items  TYPE zsd_tt_epack_prt_itm,
     END OF ts_print_data.
+
+  "! Processing result of one packing list (one form, one log row)
+  TYPES:
+    BEGIN OF ts_result,
+      packno     TYPE zsd_packno,
+      "! Company code of the invoices (authorization for saving)
+      bukrs      TYPE bukrs,
+      "! GC_STATUS-*
+      status     TYPE zsd_epack_status,
+      print      TYPE ts_print_data,
+      messages   TYPE bapiret2_t,
+      inv_count  TYPE i,
+      item_count TYPE i,
+      "! Form produced (preview shown / printed / PDF written)
+      output     TYPE abap_bool,
+      "! Data written to the Z tables
+      saved      TYPE abap_bool,
+    END OF ts_result,
+    tt_result TYPE SORTED TABLE OF ts_result WITH UNIQUE KEY packno.
 
   "! One Excel line item before grouping. The *_filled flags keep the
   "! difference between "cell empty" (merged cell) and "cell = 0",

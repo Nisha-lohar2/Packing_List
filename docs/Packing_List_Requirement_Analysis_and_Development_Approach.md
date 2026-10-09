@@ -11,7 +11,7 @@
 | Source FS | `Object ID- 102(B)Export consolidated packing list.docx` (V.01, dated 21.08.2026, prepared by Satyendra Singh, **"Approved by" blank**) |
 | Document purpose | Requirement analysis and development approach only. No code was written and no repository file other than this document was created or changed. |
 | Analysis date | 09.10.2026 |
-| Development status | Development started on 09.10.2026 at the user's request, before the open clarifications were answered. Code in `src/`; every assumption applied is listed in `docs/Development_Assumptions.md`. |
+| Development status | Development started on 09.10.2026 at the user's request, before the open clarifications were answered. Current design (Excel upload, one form per packing list, save + log): `docs/Packing_List_Report_Design.md`; assumptions: `docs/Development_Assumptions.md`; code in `src/`. |
 
 **How to read this document.** Statements are tagged as follows:
 

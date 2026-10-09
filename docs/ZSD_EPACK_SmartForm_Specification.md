@@ -12,6 +12,24 @@ the repository samples, which are treated as the approved format (A28):
 The forms contain **no SELECT and no ABAP logic other than conditions**.
 Every value is prepared by `ZCL_SD_EPACK_DATA` / `ZCL_SD_EPACK_RULES`.
 
+**One call = one packing list.** `ZSD_EPACK_PRINT` calls the form once per
+packing list number. Each call gets only that packing list's header, texts
+and items, which gives one preview, one spool request or one PDF file
+(`PackingList_<no>.pdf`) per packing list.
+
+**Content of the text blocks (Logic sheet):**
+
+| Block | Lines |
+|---|---|
+| `EXPORTER` | NAME1 · STREET · STR_SUPPL1 · "CITY1 - POST_CODE1, REGION text, COUNTRY text" · "GST NO. …" (B3–B6) |
+| `SOLDTO` / `SHIPTO` | NAME1 · "STREET, STR_SUPPL1, CITY2, POST_CODE1 CITY1, COUNTRY text" · "TEL.: … MO : …" (ADR2 R3_USER 1 / 3) · "E-MAIL : …" (ADR6) (B20–B29) |
+| `ORDERREF` | Quotation customer reference(s) and date(s), "A & B DATE: d1 & d2" (B13) |
+| `PAYMENT` | "PAYMENT TERM: <TVZBT text>" · "TERMS OF SHIPMENT :- <INCO1> <INCO2>" (B43, B44 — codes, no text, Q10) |
+| `GOODS` | Uploaded "Description of goods", else one line per HSN "<T604N text> - HS CODE : <hsn>" (B42) |
+
+The samples also show "K/A:-" contact person, FAX and ship-to "TAX NUMBER". These
+are **not in the Logic sheet** and are therefore not filled (Q09).
+
 ---
 
 ## 1. Form interface (both forms, identical)
