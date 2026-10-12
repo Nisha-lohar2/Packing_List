@@ -14,6 +14,7 @@ annexures stay in the repository root, unchanged:
 | `docs/Packing_List_Requirement_Analysis_and_Development_Approach.md` | Full requirement analysis of the FS, with 43 clarifications |
 | `docs/ZSD_EPACK_SmartForm_Specification.md` | Build instructions for the two Smart Forms, the style and the graphic |
 | `src/DDIC_and_Repository_Objects.md` | Log table `ZSD_EPACK_DATA` (the only Z table, FS layout, all invoices in one STRING field), form structures, lock object, message class, authorization object, transaction |
+| `src/Adobe_Form_Interface_Structures.md` | Adobe Form interface `ZSD_EPACK_AF_IF`: header structure `ZSD_S_EPACK_AF_HDR`, item structure `ZSD_S_EPACK_AF_ITM`, table type `ZSD_TT_EPACK_AF_ITM` (layout of sample 90000014) |
 | `src/ZSD_EPACK_PRINT.prog.abap` | Report behind transaction `ZSD_EPACK` (procedural, no custom classes) |
 | `src/ZSD_EPACK_PRINT_TOP.prog.abap` | Include: types, constants, global data |
 | `src/ZSD_EPACK_PRINT_SEL.prog.abap` | Include: selection screen and its events |

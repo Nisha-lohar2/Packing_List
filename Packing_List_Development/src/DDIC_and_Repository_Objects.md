@@ -115,6 +115,9 @@ on every row, `ZSD_TART` = 120.
 
 ## 3. Structures and table types — Smart Form interface
 
+> For the **Adobe Form** layout (sample 90000014) see `src/Adobe_Form_Interface_Structures.md`:
+> `ZSD_S_EPACK_AF_HDR`, `ZSD_S_EPACK_AF_ITM`, `ZSD_TT_EPACK_AF_ITM`, interface `ZSD_EPACK_AF_IF`.
+
 Both Smart Forms have the **same** form interface:
 
 | Parameter | Type | Content |
