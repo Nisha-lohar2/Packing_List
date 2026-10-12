@@ -163,54 +163,64 @@ FORM read_worksheet.
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& 3. Excel rows -> GT_UPLOAD
-*&    Row 1 is the heading row and is skipped. Columns are mapped by
-*&    position: Excel column 1 (A) -> 1st field of TY_UPLOAD, column 2
-*&    (B) -> 2nd field ... column 37 (AK) -> ZSD_INV_DECL.
+*& 3. <GT_EXCEL> -> GT_UPLOAD
+*&    The first row of <GT_EXCEL> is the heading row and is deleted.
+*&    Every other row is passed to GT_UPLOAD column by column
+*&    (column A = 1st cell ... column AK = 37th cell). Dates, amounts and
+*&    quantities / weights are converted to the type of the target field.
 *&---------------------------------------------------------------------*
 FORM map_data.
 
   DATA ls_upload TYPE ty_upload.
-  DATA lv_col    TYPE i.
-  DATA lv_text   TYPE string.
-  DATA lv_ok     TYPE abap_bool.
-  DATA lv_errors TYPE i.
 
   FIELD-SYMBOLS <ls_excel> TYPE any.
-  FIELD-SYMBOLS <lv_cell>  TYPE any.
-  FIELD-SYMBOLS <lv_field> TYPE any.
 
   CLEAR gt_upload.
 
-  LOOP AT <gt_excel> ASSIGNING <ls_excel> FROM 2.     " skip heading row
+  " Heading row
+  DELETE <gt_excel> INDEX 1.
+
+  LOOP AT <gt_excel> ASSIGNING <ls_excel>.
 
     CLEAR ls_upload.
 
-    DO.
-      lv_col = sy-index.
-
-      " Target field n of TY_UPLOAD - stop after the last field
-      ASSIGN COMPONENT lv_col OF STRUCTURE ls_upload TO <lv_field>.
-      IF sy-subrc <> 0.
-        EXIT.
-      ENDIF.
-
-      " Excel cell in column n - stop if the sheet has fewer columns
-      ASSIGN COMPONENT lv_col OF STRUCTURE <ls_excel> TO <lv_cell>.
-      IF sy-subrc <> 0.
-        EXIT.
-      ENDIF.
-
-      lv_text = <lv_cell>.
-      IF condense( lv_text ) IS INITIAL.
-        CONTINUE.                                        " empty cell
-      ENDIF.
-
-      PERFORM convert_cell USING lv_text CHANGING <lv_field> lv_ok.
-      IF lv_ok = abap_false.
-        lv_errors = lv_errors + 1.
-      ENDIF.
-    ENDDO.
+    PERFORM get_text   USING <ls_excel>  1 CHANGING ls_upload-zsd_packno.     " A
+    PERFORM get_text   USING <ls_excel>  2 CHANGING ls_upload-vbrk_vbeln.     " B
+    PERFORM get_number USING <ls_excel>  3 CHANGING ls_upload-zsd_sn.         " C
+    PERFORM get_number USING <ls_excel>  4 CHANGING ls_upload-zsd_inv_sn.     " D
+    PERFORM get_text   USING <ls_excel>  5 CHANGING ls_upload-zsd_artno.      " E
+    PERFORM get_number USING <ls_excel>  6 CHANGING ls_upload-zsd_std.        " F
+    PERFORM get_number USING <ls_excel>  7 CHANGING ls_upload-zsd_art.        " G
+    PERFORM get_text   USING <ls_excel>  8 CHANGING ls_upload-zsd_partno.     " H
+    PERFORM get_text   USING <ls_excel>  9 CHANGING ls_upload-zsd_matdesc.    " I
+    PERFORM get_number USING <ls_excel> 10 CHANGING ls_upload-zsd_qty.        " J
+    PERFORM get_number USING <ls_excel> 11 CHANGING ls_upload-zsd_gwt.        " K
+    PERFORM get_number USING <ls_excel> 12 CHANGING ls_upload-zsd_nwt.        " L
+    PERFORM get_text   USING <ls_excel> 13 CHANGING ls_upload-zsd_hsn.        " M
+    PERFORM get_date   USING <ls_excel> 14 CHANGING ls_upload-zsd_packdt.     " N
+    PERFORM get_text   USING <ls_excel> 15 CHANGING ls_upload-zsd_expref.     " O
+    PERFORM get_text   USING <ls_excel> 16 CHANGING ls_upload-zsd_party_ref.  " P
+    PERFORM get_date   USING <ls_excel> 17 CHANGING ls_upload-zsd_ref_dt.     " Q
+    PERFORM get_text   USING <ls_excel> 18 CHANGING ls_upload-zsd_cnty_orgn.  " R
+    PERFORM get_text   USING <ls_excel> 19 CHANGING ls_upload-zsd_np1.        " S
+    PERFORM get_text   USING <ls_excel> 20 CHANGING ls_upload-zsd_np2.        " T
+    PERFORM get_text   USING <ls_excel> 21 CHANGING ls_upload-zsd_np3.        " U
+    PERFORM get_text   USING <ls_excel> 22 CHANGING ls_upload-zsd_np4.        " V
+    PERFORM get_text   USING <ls_excel> 23 CHANGING ls_upload-zsd_np5.        " W
+    PERFORM get_text   USING <ls_excel> 24 CHANGING ls_upload-zsd_prec.       " X
+    PERFORM get_text   USING <ls_excel> 25 CHANGING ls_upload-zsd_rec_pc.     " Y
+    PERFORM get_text   USING <ls_excel> 26 CHANGING ls_upload-zsd_pol.        " Z
+    PERFORM get_text   USING <ls_excel> 27 CHANGING ls_upload-zsd_pod.        " AA
+    PERFORM get_text   USING <ls_excel> 28 CHANGING ls_upload-zsd_pld.        " AB
+    PERFORM get_text   USING <ls_excel> 29 CHANGING ls_upload-zsd_mark.       " AC
+    PERFORM get_text   USING <ls_excel> 30 CHANGING ls_upload-zsd_vsl_flt.    " AD
+    PERFORM get_text   USING <ls_excel> 31 CHANGING ls_upload-zsd_cont.       " AE
+    PERFORM get_text   USING <ls_excel> 32 CHANGING ls_upload-zsd_nopack.     " AF
+    PERFORM get_text   USING <ls_excel> 33 CHANGING ls_upload-zsd_hsn_desc.   " AG
+    PERFORM get_text   USING <ls_excel> 34 CHANGING ls_upload-zsd_pl_decl.    " AH
+    PERFORM get_number USING <ls_excel> 35 CHANGING ls_upload-zsd_adv_amt.    " AI
+    PERFORM get_text   USING <ls_excel> 36 CHANGING ls_upload-zsd_cmmt.       " AJ
+    PERFORM get_text   USING <ls_excel> 37 CHANGING ls_upload-zsd_inv_decl.   " AK
 
     " Completely empty Excel rows are not taken over
     IF ls_upload IS NOT INITIAL.
@@ -224,65 +234,94 @@ FORM map_data.
     LEAVE LIST-PROCESSING.
   ENDIF.
 
-  IF lv_errors > 0.
-    MESSAGE |{ lv_errors } cell(s) could not be converted (number / date) and were left empty|
-      TYPE 'S' DISPLAY LIKE 'W'.
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Cell n of an Excel row as text
+*&---------------------------------------------------------------------*
+FORM get_cell USING    is_row  TYPE any
+                       iv_col  TYPE i
+              CHANGING cv_text TYPE string.
+
+  FIELD-SYMBOLS <lv_cell> TYPE any.
+
+  CLEAR cv_text.
+  ASSIGN COMPONENT iv_col OF STRUCTURE is_row TO <lv_cell>.
+  IF sy-subrc = 0.
+    cv_text = <lv_cell>.
   ENDIF.
 
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& One Excel cell (text) -> target field, converted by the field type:
-*&   date fields   : Excel date number (e.g. 46275) or DD.MM.YYYY,
-*&                   DD-MM-YYYY, DD/MM/YYYY, YYYY-MM-DD
-*&   number fields : "2107.2000000000003", "1,234.5"
-*&   text fields   : as it is (incl. several invoice numbers in one cell)
+*& Text field - value as it is (several invoice numbers stay in one
+*& string)
 *&---------------------------------------------------------------------*
-FORM convert_cell USING    iv_text  TYPE string
-                  CHANGING cv_field TYPE any
-                           cv_ok    TYPE abap_bool.
+FORM get_text USING    is_row   TYPE any
+                       iv_col   TYPE i
+              CHANGING cv_value TYPE any.
 
-  DATA lv_kind TYPE c LENGTH 1.
+  DATA lv_text TYPE string.
+
+  PERFORM get_cell USING is_row iv_col CHANGING lv_text.
+  cv_value = lv_text.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Number field - quantity, weight, amount, Sl.No. ...
+*& "2107.2000000000003" / "1,234.5" -> type of the target field
+*&---------------------------------------------------------------------*
+FORM get_number USING    is_row   TYPE any
+                         iv_col   TYPE i
+                CHANGING cv_value TYPE any.
+
   DATA lv_text TYPE string.
   DATA lv_num  TYPE decfloat34.
-  DATA lv_int  TYPE i.
+
+  CLEAR cv_value.
+  PERFORM get_cell USING is_row iv_col CHANGING lv_text.
+  lv_text = condense( val = lv_text del = ` ` ).
+  REPLACE ALL OCCURRENCES OF `,` IN lv_text WITH ``.
+  IF lv_text IS INITIAL.
+    RETURN.
+  ENDIF.
+
+  TRY.
+      lv_num   = lv_text.
+      cv_value = lv_num.          " rounded to the decimals of the field
+    CATCH cx_sy_conversion_error cx_sy_arithmetic_error.
+      MESSAGE |Value "{ lv_text }" in column { iv_col } is not a number - left empty|
+        TYPE 'S' DISPLAY LIKE 'W'.
+  ENDTRY.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Date field - Excel date number or DD.MM.YYYY etc. -> YYYYMMDD
+*&---------------------------------------------------------------------*
+FORM get_date USING    is_row   TYPE any
+                       iv_col   TYPE i
+              CHANGING cv_value TYPE any.
+
+  DATA lv_text TYPE string.
   DATA lv_date TYPE d.
+  DATA lv_ok   TYPE abap_bool.
 
-  cv_ok = abap_true.
-  DESCRIBE FIELD cv_field TYPE lv_kind.
-  lv_text = condense( iv_text ).
+  CLEAR cv_value.
+  PERFORM get_cell USING is_row iv_col CHANGING lv_text.
+  lv_text = condense( val = lv_text del = ` ` ).
+  IF lv_text IS INITIAL.
+    RETURN.
+  ENDIF.
 
-  CASE lv_kind.
-
-    WHEN 'D'.                                            " date
-      PERFORM convert_date USING lv_text CHANGING lv_date cv_ok.
-      IF cv_ok = abap_true.
-        cv_field = lv_date.
-      ENDIF.
-
-    WHEN 'N' OR 'I' OR 'b' OR 's' OR '8'.                " whole number
-      REPLACE ALL OCCURRENCES OF `,` IN lv_text WITH ``.
-      TRY.
-          lv_num = lv_text.
-          lv_int = round( val = lv_num dec = 0 ).
-          cv_field = lv_int.
-        CATCH cx_sy_conversion_error cx_sy_arithmetic_error.
-          cv_ok = abap_false.
-      ENDTRY.
-
-    WHEN 'P' OR 'F' OR 'a' OR 'e'.                       " decimal number
-      REPLACE ALL OCCURRENCES OF `,` IN lv_text WITH ``.
-      TRY.
-          lv_num = lv_text.
-          cv_field = lv_num.
-        CATCH cx_sy_conversion_error cx_sy_arithmetic_error.
-          cv_ok = abap_false.
-      ENDTRY.
-
-    WHEN OTHERS.                                         " text, as it is
-      cv_field = iv_text.
-
-  ENDCASE.
+  PERFORM convert_date USING lv_text CHANGING lv_date lv_ok.
+  IF lv_ok = abap_true.
+    cv_value = lv_date.
+  ELSE.
+    MESSAGE |Value "{ lv_text }" in column { iv_col } is not a date - left empty|
+      TYPE 'S' DISPLAY LIKE 'W'.
+  ENDIF.
 
 ENDFORM.
 
