@@ -11,6 +11,51 @@
 REPORT zsd_epack_print.
 
 *----------------------------------------------------------------------*
+* Type of one upload row - columns of the Excel template, in order
+*----------------------------------------------------------------------*
+TYPES:
+  BEGIN OF ty_upload,
+    zsd_packno    TYPE zsd_vbeln,       " Packing list Number
+    vbrk_vbeln    TYPE z_string,        " SAP Invoice Number (one or "A, B")
+    zsd_sn        TYPE zserno,          " Sl.No.
+    zsd_inv_sn    TYPE zserno,          " Sr.No. INV
+    zsd_artno     TYPE zchar15,         " Article No.
+    zsd_std       TYPE zsqno,           " STD
+    zsd_art       TYPE zsqno,           " Articles
+    zsd_partno    TYPE zsd_debezei40,   " Part No.
+    zsd_matdesc   TYPE zsd_debezei40,   " Product Description (fetch from material master)
+    zsd_qty       TYPE zqty,            " Quantity Pcs
+    zsd_gwt       TYPE zde_grwt,        " Gross Wt. KGS
+    zsd_nwt       TYPE zde_net_wt,      " Net Wt. KGS
+    zsd_hsn       TYPE zna_segment,     " H.S Code
+    zsd_packdt    TYPE zsd_date,        " Packing list date
+    zsd_expref    TYPE zsd_uid,         " Exporter Ref
+    zsd_party_ref TYPE zref,            " Buyer's Reference No. & Date
+    zsd_ref_dt    TYPE zsd_date,        " Buyer's Reference date
+    zsd_cnty_orgn TYPE zsd_uid,         " Country of origin of goods
+    zsd_np1       TYPE zsd_np,          " Notifier Party1
+    zsd_np2       TYPE zsd_np,          " Notifier Party2
+    zsd_np3       TYPE zsd_np,          " Notifier Party3
+    zsd_np4       TYPE zsd_np,          " Notifier Party4
+    zsd_np5       TYPE zsd_np,          " Notifier Party5
+    zsd_prec      TYPE zchar30,         " Pre-Carriage
+    zsd_rec_pc    TYPE zchar30,         " Place of Receipt by Pre-carrier
+    zsd_pol       TYPE zchar30,         " Port of Loading
+    zsd_pod       TYPE zchar30,         " Port of Discharge
+    zsd_pld       TYPE zchar30,         " Place of Delivery
+    zsd_mark      TYPE zsd_mark,        " Marks & Nos.
+    zsd_vsl_flt   TYPE zchar30,         " Vessel / Flight No.
+    zsd_cont      TYPE zsd_cont,        " Container No
+    zsd_nopack    TYPE zsd_nopack,      " No. of Packages
+    zsd_hsn_desc  TYPE zsd_hsn_desc,    " Description of goods
+    zsd_pl_decl   TYPE z_string,        " Declaration of Packing list
+    zsd_adv_amt   TYPE zde_amt1,        " Advance amount received
+    zsd_cmmt      TYPE zsd_cmmt,        " Commercial terms of invoice
+    zsd_inv_decl  TYPE z_string,        " Declaration of Invoice
+  END OF ty_upload,
+  ty_upload_tab TYPE STANDARD TABLE OF ty_upload WITH EMPTY KEY.
+
+*----------------------------------------------------------------------*
 * Data
 *----------------------------------------------------------------------*
 DATA gt_bin     TYPE solix_tab.                      " file, binary
@@ -22,6 +67,7 @@ DATA gv_sheet   TYPE string.                         " worksheet name
 DATA gr_data    TYPE REF TO data.                    " worksheet data
 
 FIELD-SYMBOLS <gt_excel> TYPE STANDARD TABLE.        " Excel data, as it is
+DATA gt_upload  TYPE ty_upload_tab.                  " upload rows, typed
 
 *----------------------------------------------------------------------*
 * Selection screen
