@@ -1,11 +1,14 @@
-# WRICEF 102-B — Adobe Form interface: structures and table types
+# WRICEF 102-B — Adobe Form `ZSD_EPACK_AF`: interface, structures and table type
 
 Layout reference: `PackingList_90000014_Tarmac_UAE_BySea.pdf` (4 pages, format
 **without notify party**, consignee block only). Every field printed on that form is
-covered below. The notify-party fields are included so that the same interface also
-serves the format **with notify party** (sample 90000081).
+covered below. There is **one Adobe Form** for both FS formats: the notify-party section
+(sample 90000081) is shown only when notify parties are maintained.
 
-All objects are new, in package `ZSD_EPACK`, created in SE11. Logic-sheet rows (`Bxx`)
+All objects are new, in package `ZSD_EPACK`. The report `ZSD_EPACK_PRINT` fills the
+structures (FORM `BUILD_ONE`, `BUILD_PRINT_ITEMS`) and calls the form once per packing list
+(FORM `SEND_FORM`: `FP_FUNCTION_MODULE_NAME`, `FP_JOB_OPEN`, generated function module,
+`FP_JOB_CLOSE`). Logic-sheet rows (`Bxx`)
 and Excel columns refer to `docs/Packing_List_Report_Design.md` §2.
 
 | Object | Kind | Purpose |
@@ -14,6 +17,7 @@ and Excel columns refer to `docs/Packing_List_Report_Design.md` §2.
 | `ZSD_S_EPACK_AF_ITM` | Structure | One printed row of the item table |
 | `ZSD_TT_EPACK_AF_ITM` | Table type | Standard table of `ZSD_S_EPACK_AF_ITM` |
 | `ZSD_EPACK_AF_IF` | Form interface (SFP, ABAP-Dictionary based) | Import `IS_HEADER` / `IT_ITEM` |
+| `ZSD_EPACK_AF` | Adobe Form (SFP) | The only form — layout of samples 90000014 / 90000081 (§5) |
 
 **Design rules**
 
@@ -23,7 +27,6 @@ and Excel columns refer to `docs/Packing_List_Report_Design.md` §2.
   on the 2nd+ line of a package) is simply empty.
 * **Multi-line blocks are `STRING` fields** with line breaks (`cl_abap_char_utilities=>newline`).
   Bind them to multi-line text fields with "Allow multiple lines" and auto-fit height.
-  This replaces the Smart Form text table `ZSD_TT_EPACK_PRT_TXT`.
 * **Section headings and subtotal rows are rows of `IT_ITEM`**, with `ROW_TYPE` choosing the row layout
   (Adobe: one table body row per row type, shown with a `presence` script on `ROW_TYPE`).
 * **Totals are in the header**, because the totals row prints once at the end of the table.
@@ -52,7 +55,7 @@ Example values are from packing list 90000014.
 |---|---|---|---:|---|---|---|
 | 1 | `PACKNO` | DE `ZSD_PACKNO` | 10 | Packing List No. | `90000014` | B9 · Excel M |
 | 2 | `PACKDT` | CHAR | 10 | Date | `27-05-2025` | B10 · Excel N (DD-MM-YYYY) |
-| 3 | `FORMAT` | CHAR | 1 | — (controls layout) | `O` | `O` = without notify party, `N` = with notify party |
+| 3 | `FORMAT` | CHAR | 1 | — (controls layout) | `O` | `N` = notify parties maintained → notify-party section shown; `O` = hidden (FS 1.1, A05) |
 | 4 | `NP_COUNT` | INT1 | 3 | — | `0` | number of filled notify parties (0–5) |
 
 ### 2.2 Exporter (left box, "EXPORTER :")
@@ -87,7 +90,7 @@ the form prints both blocks (`SAME_PARTY` = space).
 | 22 | `BUY_MOBILE` | CHAR | 30 | `MO :` | — | B22 sold-to `ADR2` (`R3_USER` 3) |
 | 23 | `BUY_EMAIL` | CHAR | 241 | `E-MAIL:` | — | B23 sold-to `ADR6-SMTP_ADDR` |
 
-### 2.4 Notify parties (format with notify party only)
+### 2.4 Notify parties (shown only when `FORMAT` = `N`)
 
 | # | Component | Type | Label on the form | Source |
 |---|---|---|---|---|
@@ -210,3 +213,16 @@ table footer, last page only. The declaration and signature box print on the las
 | Company stamp and signature | Not printed (signed by hand), or an MIME graphic if the business wants it |
 | Diagonal line through the empty part of the table on the last page | Form layout (as on the sample; optional) |
 | Header repeated on every page | Header subform placed on the master page |
+
+---
+
+## 5. Adobe Form `ZSD_EPACK_AF` (SFP) — layout notes
+
+| Area | Content | Shown |
+|---|---|---|
+| Master page | Title "PACKING LIST", exporter box, consignee / buyer, notify parties, right box (PL no., date, exporter's ref., CIN, GST, order no., buyer's ref., countries, terms), shipping box, marks / containers / packages / goods, item column headings, page "Page n of m" | every page |
+| Consignee | `SAME_PARTY` = X: one "CONSIGNEE :" block (`CNS_*`). Otherwise "SOLD TO / BILL TO PARTY (BUYER) :" (`BUY_*`) and "SHIP TO PARTY (CONSIGNEE) :" (`CNS_*`) | presence script on `SAME_PARTY` |
+| Notify parties | Subform with "1ST … 5TH NOTIFY PARTY :" + `NP1`…`NP5`; each party subform hidden when its field is empty | presence script on `FORMAT` = `N` |
+| Item table | Bound to `IT_ITEM`. Three body rows: heading (`ROW_TYPE` = `H`, `ROW_TEXT` across the table), item (`I`), subtotal (`S`, `ARTICLES` + `ROW_TEXT`) — each hidden unless its row type matches. Header row repeated on each page; rows may break between pages | every page |
+| Totals row | `TOT_ART`, `TOT_TEXT`, `TOT_QTY`, `TOT_GWT`, `TOT_NWT` | table footer, last page |
+| Declaration / signature | "Declaration :" + `DECLARATION`; "Signature & Date", "For " + `SIGN_FOR`, "Authorized Signatory" | last page |

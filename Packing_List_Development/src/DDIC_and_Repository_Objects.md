@@ -50,9 +50,6 @@ Data element name = field name (FS "Tech name").
 | `ZSD_PL_DECL` / `ZSD_INV_DECL` | `STRING` | | | Declarations (FS CHAR 1500 exceeds the table limit) |
 | `ZSD_ADV_AMT` | CURR | 15 | 2 | Advance amount |
 | `ZSD_INVOICES` | `STRING` | | | All invoice numbers of the packing list (used for `VBRK_VBELN`) |
-| `ZSD_EPACK_BLOCK` | CHAR | 10 | | Form text block id (form interface) |
-| `ZSD_EPACK_ROW_TYPE` | CHAR, values `H` / `I` / `S` | 1 | | Printed row type (form interface) |
-| `ZSD_EPACK_STATUS` | CHAR, values `S` / `W` / `E` | 1 | | Status in the result list |
 
 ---
 
@@ -113,75 +110,24 @@ on every row, `ZSD_TART` = 120.
 
 ---
 
-## 3. Structures and table types — Smart Form interface
+## 3. Adobe Form `ZSD_EPACK_AF` — interface, structures and table type
 
-> For the **Adobe Form** layout (sample 90000014) see `src/Adobe_Form_Interface_Structures.md`:
-> `ZSD_S_EPACK_AF_HDR`, `ZSD_S_EPACK_AF_ITM`, `ZSD_TT_EPACK_AF_ITM`, interface `ZSD_EPACK_AF_IF`.
+One Adobe Form for both FS formats. The notify-party section is shown only when notify
+parties are maintained (`IS_HEADER-FORMAT` = `N`, `NP_COUNT` > 0). Full field lists,
+examples and sources: **`src/Adobe_Form_Interface_Structures.md`**.
 
-Both Smart Forms have the **same** form interface:
-
-| Parameter | Type | Content |
+| Object | Type | Content |
 |---|---|---|
-| `IS_HEADER` | `ZSD_S_EPACK_PRT_HDR` | Single values of the header |
-| `IT_TEXT` | `ZSD_TT_EPACK_PRT_TXT` | All multi-line blocks (addresses, notify parties, …) |
-| `IT_ITEM` | `ZSD_TT_EPACK_PRT_ITM` | Printed item rows incl. headings and subtotals |
-
-### 3.1 `ZSD_S_EPACK_PRT_HDR`
-
-| Component | Type | Content |
-|---|---|---|
-| `PACKNO` | `ZSD_PACKNO` | Packing List No. |
-| `PACKDT_TXT` | CHAR 10 | Date, DD-MM-YYYY |
-| `IEC` | CHAR 40 | Exporter's Ref. "IEC:…" |
-| `GSTIN` | CHAR 18 | GST No. |
-| `CIN` | CHAR 40 | CIN No. |
-| `CNTY_ORGN` | CHAR 20 | Country of origin |
-| `CNTY_DEST` | CHAR 50 | Country of final destination (ship-to) |
-| `SAME_PARTY` | `XFELD` | Sold-to = ship-to → one "CONSIGNEE" block (A15, Q09) |
-| `PREC`, `REC_PC`, `VSL_FLT`, `POL`, `POD`, `PLD` | CHAR 30 | Shipping fields |
-| `NP_COUNT` | `INT1` | Number of filled notify parties (0–5) |
-| `TOT_ART_TXT` | CHAR 10 | Total articles / packages |
-| `TOT_QTY_TXT` | CHAR 17 | Total quantity |
-| `TOT_GWT_TXT`, `TOT_NWT_TXT` | CHAR 17 | Total gross / net weight, 3 decimals |
-| `TOT_TEXT` | CHAR 132 | "(Total 2342 Loose Pipes + 1073 Boxes = 3415 Packages)" |
-
-### 3.2 `ZSD_S_EPACK_PRT_TXT` / `ZSD_TT_EPACK_PRT_TXT` (standard table)
-
-| Component | Type |
-|---|---|
-| `BLOCK` | `ZSD_EPACK_BLOCK` — `EXPORTER`, `SOLDTO`, `SHIPTO`, `NP1`…`NP5`, `ORDERREF`, `BUYERREF`, `PAYMENT`, `MARKS`, `CONTAINER`, `PACKAGES`, `GOODS`, `DECL` |
-| `LINE_NO` | NUMC 3 |
-| `TEXT` | CHAR 255 |
-
-### 3.3 `ZSD_S_EPACK_PRT_ITM` / `ZSD_TT_EPACK_PRT_ITM` (standard table)
-
-| Component | Type | Content |
-|---|---|---|
-| `ROW_TYPE` | `ZSD_EPACK_ROW_TYPE` | `H` / `I` / `S` |
-| `ROW_TEXT` | CHAR 132 | Heading text or "<=Loose Pipes" |
-| `SN_TXT`, `INV_SN_TXT`, `STD_TXT` | CHAR 6 | Without leading zeros |
-| `ARTNO` | `ZSD_ARTNO` | |
-| `ART_TXT` | CHAR 10 | Only on the first line of an article group |
-| `PARTNO` | `ZSD_PARTNO` | |
-| `MATDESC` | `ZSD_MATDESC` | |
-| `QTY_TXT` | CHAR 17 | |
-| `GWT_TXT`, `NWT_TXT` | CHAR 17 | Only on the first line of a weight group |
-| `HSN` | `ZSD_HSN` | |
-| `ART_FIRST`, `ART_LAST`, `WT_FIRST`, `WT_LAST` | `XFELD` | For the borders of the "merged" cells |
-| `ART_GRP`, `WT_GRP` | NUMC 4 | |
+| `ZSD_S_EPACK_AF_HDR` | Structure (SE11) | Header: 50 fields — exporter, consignee / buyer, notify parties, references, shipping, terms, marks / containers / packages, goods, totals, declaration |
+| `ZSD_S_EPACK_AF_ITM` | Structure (SE11) | One printed row: row type, Sl.No., Sr.No. INV, Article No., STD, Articles, Part No., Product Description, Quantity, Gross / Net Wt., H.S Code, group fields |
+| `ZSD_TT_EPACK_AF_ITM` | Table type (SE11) | Standard table of `ZSD_S_EPACK_AF_ITM` |
+| `ZSD_EPACK_AF_IF` | Form interface (SFP) | `IS_HEADER` TYPE `ZSD_S_EPACK_AF_HDR`, `IT_ITEM` TYPE `ZSD_TT_EPACK_AF_ITM` |
+| `ZSD_EPACK_AF` | Adobe Form (SFP) | Layout of samples 90000014 / 90000081 |
 
 ---
 
+## 4. Message class `ZSD_EPACK` — new (SE91)
 
-## 4. Lock object `EZSD_EPACK` — new (SE11)
-
-Primary table `ZSD_EPACK_DATA`, mode `E`, lock parameters `MANDT`, `ZSD_PACKNO`.
-Generates `ENQUEUE_EZSD_EPACK` / `DEQUEUE_EZSD_EPACK` (parameter `MODE_ZSD_EPACK_DATA`).
-It prevents two users writing the same packing list at the same time.
-
----
-
-## 5. Message class `ZSD_EPACK` — new (SE91)
 
 | No. | Text | Raised by |
 |---|---|---|
@@ -189,11 +135,8 @@ It prevents two users writing the same packing list at the same time.
 | `002` | `Package from Sl.No. &1: gross weight &2 kg is less than net weight &3 kg` | rules |
 | `008` | `Invoice &1 does not exist` | data |
 | `009` | `Invoice &1 is cancelled or is a cancellation document` | data |
-| `010` | `Billing type &2 of invoice &1 is not allowed for export packing lists` | data |
 | `011` | `Invoices &3 differ in &1 (&2) - one packing list needs one value` | data |
-| `012` | `No authorization: &1 &2, activity &3` | data / store |
-| `013` | `Notify parties exist for packing list &1 - use format with notify party` | data |
-| `014` | `Packing list &1 is locked by user &2 - not written to the log table` | save |
+| `012` | `No authorization: &1 &2, activity &3` | data |
 | `015` | `File &1 could not be read: &2` | upload |
 | `016` | `Column "&1" not found in the heading row of the file` | upload |
 | `017` | `Row &1: mandatory field &2 is empty` | upload |
@@ -211,7 +154,7 @@ It prevents two users writing the same packing list at the same time.
 | `036` | `The file contains no line items` | upload |
 | `038` | `PDF saved: &1` | report |
 | `039` | `Error &1 in &2` | output |
-| `040` | `Smart Form &1 does not exist or is not active` | output |
+| `040` | `Adobe Form &1 does not exist or is not active` | output |
 | `041` | `Row &1: Sl.No. &2 is not in ascending order` | rules |
 | `042` | `No &1 partner in KNVP for customer &2, sales area &3` | data |
 | `044` | `Sl.No. &1: no HSN code in upload or material master` | data (warning) |
@@ -238,46 +181,49 @@ It prevents two users writing the same packing list at the same time.
 
 ---
 
-## 6. Repository objects — new
+## 5. Repository objects — new (complete list)
 
-| Object | Type | Purpose |
-|---|---|---|
-| `ZSD_EPACK` | Package | Container |
-| `ZSD_EPACK_DATA` | Transparent table | **The only Z table** — log of printed packing lists (FS) |
-| `EZSD_EPACK` | Lock object | Lock per packing list |
-| `ZSD_S_EPACK_PRT_HDR`, `ZSD_S_EPACK_PRT_TXT`, `ZSD_S_EPACK_PRT_ITM` + table types | Structures | Smart Form interface (no database tables) |
-| `ZSD_EPACK` | Message class | Messages |
-| `ZSD_EPACK` | Authorization object | Print / write per company code |
-| `ZSD_EPACK_PRINT` | Executable program | Report frame, START-OF-SELECTION |
-| `ZSD_EPACK_PRINT_TOP` / `_SEL` / `_F01` / `_F02` | Includes | Types and data / selection screen / main FORMs / helper FORMs |
-| `ZSD_EPACK_WITH_NP`, `ZSD_EPACK_WITHOUT_NP` | Smart Forms | See `docs/ZSD_EPACK_SmartForm_Specification.md` |
-| `ZSD_EPACK_STYLE` | Smart Style | Shared formats |
-| `ZSD_EPACK_CROSS` | SE78 graphic | Diagonal line for unused notify-party sections |
-| **`ZSD_EPACK`** | Transaction (SE93) | Report transaction for `ZSD_EPACK_PRINT` (FS) |
+| # | Object | Type | Transaction |
+|---|---|---|---|
+| 1 | `ZSD_EPACK` | Package | SE80 |
+| 2 | Data elements of §1 | Data elements | SE11 |
+| 3 | `ZSD_EPACK_DATA` | Transparent table — **the only Z table** (log of printed packing lists, FS) | SE11 |
+| 4 | `ZSD_S_EPACK_AF_HDR` | Structure — Adobe Form header | SE11 |
+| 5 | `ZSD_S_EPACK_AF_ITM` | Structure — Adobe Form item row | SE11 |
+| 6 | `ZSD_TT_EPACK_AF_ITM` | Table type — Adobe Form items | SE11 |
+| 7 | `ZSD_EPACK_AF_IF` | Adobe Form interface | SFP |
+| 8 | `ZSD_EPACK_AF` | Adobe Form — the only form | SFP |
+| 9 | `ZSD_EPACK` | Message class | SE91 |
+| 10 | `ZSD_EPACK_PRINT` | Executable program (report frame) | SE38 |
+| 11 | `ZSD_EPACK_PRINT_TOP` / `_SEL` / `_F01` / `_F02` | Includes: types and data / selection screen / main FORMs / helper FORMs | SE38 |
+
+**Not created for now** (removed on request): transaction code, lock object,
+custom authorization object, TVARVC billing-type filter, Smart Forms with their
+structures, style and graphic. The report is started with SE38 / SA38.
 
 ---
 
-## 7. Authorization (FS 2.3 is empty — A24)
+## 6. Authorization
 
 | Object | Fields | Where |
 |---|---|---|
-| `S_TCODE` | `ZSD_EPACK` | Transaction start |
-| **`ZSD_EPACK`** (new, SU21, class `SD`) | `ACTVT` 04 print / 01 write log, `BUKRS` | FORMs `CHECK_AUTHORITY`, `SAVE_PACKING_LISTS` |
-| `V_VBRK_VKO` | `VKORG`, `ACTVT` = 04 | Print — per sales org. of the invoices |
+| `V_VBRK_VKO` (standard) | `VKORG`, `ACTVT` = 04 | FORM `CHECK_AUTHORITY` — print only for invoices of permitted sales organizations |
+
+No custom authorization object for now (A24).
 
 ---
 
-## 8. Customizing / parameters
+## 7. Master data used (no new object)
 
-| Object | Entry | Purpose |
+| Data | Entry | Purpose |
 |---|---|---|
-| `TVARVC` select-option `ZSD_EPACK_FKART` | Export tax-invoice billing types | Only these billing types are accepted. Empty = all accepted (A11). |
 | `T001Z` party `ZCIN` | CIN per company code | Logic B7 |
 | Company address field `BUILDING` | IEC number | Logic B11 |
 
 ---
 
-## 9. SAP objects consumed — read only (logic sheet rows)
+## 8. SAP objects consumed — read only (logic sheet rows)
+
 
 Every table is read **once per run** for all packing lists (FOR ALL ENTRIES).
 
@@ -301,7 +247,7 @@ Every table is read **once per run** for all packing lists (FOR ALL ENTRIES).
 | `MAKT` | `MAKTX` (logic sheet says `MARA`) | B54 |
 | `MARC` | `STEUC` for billed material + billing plant | B42, B58 |
 | `T604N` | `TEXT1` for `SPRAS` E, `LAND1` IN | B42 |
-| `TVARVC`, `USR01` | billing-type filter, default printer | — |
+| `USR01` | default printer | — |
 
 > ⚠ **Verify before activation** in DEV: `J_1BBRANCH-GSTIN`, `T604N` key and
 > text field, `TVZBT-ZTAGG`, `KNVP-DEFPA`, `ADR2-R3_USER` values. Each read is
@@ -309,15 +255,15 @@ Every table is read **once per run** for all packing lists (FOR ALL ENTRIES).
 
 ---
 
-## 10. Activation order and transports
+## 9. Activation order and transport
 
 | Order | Objects |
 |---|---|
-| 1 | Data elements |
-| 2 | Table `ZSD_EPACK_DATA`, lock object `EZSD_EPACK` |
-| 3 | Form-interface structures and table types |
-| 4 | Message class, authorization object |
-| 5 | Smart Style, SE78 graphic, both Smart Forms |
-| 6 | Program `ZSD_EPACK_PRINT` with includes `_TOP`, `_SEL`, `_F01`, `_F02`; transaction `ZSD_EPACK` |
+| 1 | Package, data elements |
+| 2 | Table `ZSD_EPACK_DATA` |
+| 3 | Structures `ZSD_S_EPACK_AF_HDR`, `ZSD_S_EPACK_AF_ITM`, table type `ZSD_TT_EPACK_AF_ITM` |
+| 4 | Form interface `ZSD_EPACK_AF_IF`, then Adobe Form `ZSD_EPACK_AF` |
+| 5 | Message class `ZSD_EPACK` |
+| 6 | Program `ZSD_EPACK_PRINT` with includes `_TOP`, `_SEL`, `_F01`, `_F02` |
 
-Workbench request: everything above. Customizing: `TVARVC` entry, roles.
+One workbench request for everything above.

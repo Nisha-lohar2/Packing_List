@@ -4,7 +4,7 @@
 *& Main routines:
 *&   1. Excel upload -> packing lists        (FORM parse_*, map_*)
 *&   2. SAP data per FS logic sheet, bulk     (FORM read_sap_data, build_one)
-*&   3. One Smart Form per packing list       (FORM output_forms)
+*&   3. One Adobe Form per packing list       (FORM output_forms)
 *&   4. Save to Z table ZSD_EPACK_DATA (log) (FORM save_packing_lists)
 *&
 *& PERFORMANCE: READ_SAP_DATA reads every SAP table ONCE for the invoices
@@ -754,14 +754,6 @@ FORM read_sap_data USING it_packing_lists TYPE ty_packing_list_tab.
     WHERE vbeln = @lt_inv-table_line
     INTO TABLE @gt_vbrp.
 
-  " Allowed billing types (A11) - empty = all allowed
-  SELECT sign, opti AS option, low, high
-    FROM tvarvc
-    WHERE name = @gc_tvarv_fkart
-      AND type = 'S'
-    INTO CORRESPONDING FIELDS OF TABLE @gr_fkart.
-  DELETE gr_fkart WHERE low IS INITIAL AND high IS INITIAL.
-
   LOOP AT gt_vbrk INTO DATA(ls_vbrk).
     INSERT VALUE #( kunnr = ls_vbrk-kunag vkorg = ls_vbrk-vkorg
                     vtweg = ls_vbrk-vtweg spart = ls_vbrk-spart ) INTO TABLE lt_area.
@@ -983,15 +975,10 @@ ENDFORM.
 FORM prepare_all.
 
   DATA ls_result TYPE ty_result.
-  DATA lv_format TYPE char1.
-
-  lv_format = COND #( WHEN p_fwith = abap_true THEN gc_fmt_with
-                      WHEN p_fwout = abap_true THEN gc_fmt_wout
-                      ELSE gc_fmt_auto ).
 
   CLEAR gt_result.
   LOOP AT gt_packing_lists INTO DATA(ls_pl).
-    PERFORM build_one USING ls_pl lv_format CHANGING ls_result.
+    PERFORM build_one USING ls_pl CHANGING ls_result.
     INSERT ls_result INTO TABLE gt_result.
   ENDLOOP.
 
@@ -1001,7 +988,6 @@ ENDFORM.
 *& Build the form data of ONE packing list from its own invoices and items
 *&---------------------------------------------------------------------*
 FORM build_one USING    is_pl     TYPE ty_packing_list
-                        iv_format TYPE char1
                CHANGING cs_result TYPE ty_result.
 
   DATA lt_msg        TYPE bapiret2_t.
@@ -1011,18 +997,17 @@ FORM build_one USING    is_pl     TYPE ty_packing_list
   DATA lt_headings   TYPE ty_hsn_heading_tab.
   DATA lt_goods      TYPE ty_text_tab.
   DATA lt_lines      TYPE ty_text_tab.
-  DATA lt_texts      TYPE zsd_tt_epack_prt_txt.
   DATA ls_vbrk       TYPE ty_vbrk.
   DATA ls_sold_to    TYPE ty_partner.
   DATA ls_ship_to    TYPE ty_partner.
-  DATA ls_header     TYPE zsd_s_epack_prt_hdr.
+  DATA ls_party      TYPE ty_party_data.
+  DATA ls_header     TYPE zsd_s_epack_af_hdr.
   DATA ls_totals     TYPE ty_totals.
   DATA lv_np_count   TYPE i.
   DATA lv_errors     TYPE abap_bool.
   DATA lv_text       TYPE string.
   DATA lv_vtext      TYPE tvzbt-vtext.
   DATA lv_buyer_ref  TYPE string.
-  DATA lv_block      TYPE zsd_epack_block.
 
   CLEAR cs_result.
   lt_msg = is_pl-messages.
@@ -1030,6 +1015,7 @@ FORM build_one USING    is_pl     TYPE ty_packing_list
   cs_result-packno     = is_pl-packno.
   cs_result-inv_count  = lines( is_pl-invoices ).
   cs_result-item_count = lines( is_pl-items ).
+  cs_result-print-form = gc_form_name.
 
   " Errors from the upload stop this packing list - but no other one
   PERFORM has_errors USING lt_msg CHANGING lv_errors.
@@ -1039,14 +1025,13 @@ FORM build_one USING    is_pl     TYPE ty_packing_list
     PERFORM check_consistency USING lt_vbrk CHANGING lt_msg.
     PERFORM check_authority   USING lt_vbrk CHANGING lt_msg.
 
-    " FS 2.1 - GW >= NW at output time (again, for saved data)
+    " FS 2.1 - GW >= NW at output time
     READ TABLE lt_msg TRANSPORTING NO FIELDS WITH KEY number = '001'.
     IF sy-subrc <> 0.
       PERFORM check_weights USING is_pl-items CHANGING lt_msg.
     ENDIF.
 
-    PERFORM determine_form USING is_pl-header iv_format
-                           CHANGING cs_result-print-form lv_np_count lt_msg.
+    PERFORM count_notify_parties USING is_pl-header CHANGING lv_np_count.
 
     " All invoices agree (check_consistency), so the header values of
     " any of them are the values of all of them
@@ -1073,7 +1058,6 @@ FORM build_one USING    is_pl     TYPE ty_packing_list
     ENDLOOP.
   ENDLOOP.
 
-  " ---- Header -----------------------------------------------------------
   READ TABLE gt_t001 INTO DATA(ls_t001) WITH TABLE KEY id = ls_vbrk-bukrs.
   READ TABLE gt_adrc INTO DATA(ls_company) WITH TABLE KEY addrnumber = ls_t001-adrnr.
   IF sy-subrc <> 0.
@@ -1092,113 +1076,118 @@ FORM build_one USING    is_pl     TYPE ty_packing_list
     CLEAR ls_ship_adr.
   ENDIF.
 
-  ls_header-packno = is_pl-header-zsd_packno.
+  " ---- Document ---------------------------------------------------------
+  ls_header-packno = is_pl-header-zsd_packno.                 " logic B9
   PERFORM format_date USING is_pl-header-zsd_packdt CHANGING lv_text.
-  ls_header-packdt_txt = lv_text.
-  ls_header-gstin      = ls_branch-gstin.                 " logic B6
-  ls_header-cin        = ls_t001z-paval.                  " logic B7
-  ls_header-cnty_orgn  = is_pl-header-zsd_cnty_orgn.      " logic B16
-  PERFORM country_text USING ls_ship_adr-country CHANGING lv_text.
-  ls_header-cnty_dest  = lv_text.                         " logic B17
-  ls_header-same_party = xsdbool( ls_sold_to-kunnr = ls_ship_to-kunnr ).
-  ls_header-prec       = is_pl-header-zsd_prec.           " logic B33-B38
-  ls_header-rec_pc     = is_pl-header-zsd_rec_pc.
-  ls_header-vsl_flt    = is_pl-header-zsd_vsl_flt.
-  ls_header-pol        = is_pl-header-zsd_pol.
-  ls_header-pod        = is_pl-header-zsd_pod.
-  ls_header-pld        = is_pl-header-zsd_pld.
-  ls_header-np_count   = lv_np_count.
+  ls_header-packdt   = lv_text.                               " logic B10
+  ls_header-np_count = lv_np_count.
+  ls_header-format   = COND #( WHEN lv_np_count > 0 THEN gc_fmt_with_np ELSE gc_fmt_wout_np ).
 
-  " Exporter's Ref. - logic B11: company address field BUILDING
-  IF ls_company-building IS NOT INITIAL.
-    IF ls_company-building CS 'IEC'.
-      ls_header-iec = ls_company-building.
-    ELSE.
-      ls_header-iec = |IEC:{ ls_company-building }|.
-    ENDIF.
-  ENDIF.
+  " ---- Exporter - logic B3-B7, B11 --------------------------------------
+  PERFORM exporter_data USING ls_t001-adrnr CHANGING ls_party lt_msg.
+  ls_header-exp_name    = ls_party-name.
+  ls_header-exp_address = ls_party-address.
+  ls_header-sign_for    = ls_party-name.
+  ls_header-exp_gstin   = ls_branch-gstin.                    " logic B6
+  ls_header-exp_cin     = ls_t001z-paval.                     " logic B7
+  " Logic B11: company address field BUILDING; the form prints "IEC:"
+  lv_text = ls_company-building.
+  REPLACE FIRST OCCURRENCE OF REGEX '^\s*IEC\s*[:.\-]?\s*' IN lv_text WITH `` IGNORING CASE.
+  ls_header-exp_iec = lv_text.
 
-  IF ls_header-gstin IS INITIAL.
+  IF ls_header-exp_gstin IS INITIAL.
     PERFORM add_msg USING 'W' '049' 'GST No.' space space space CHANGING lt_msg.
   ENDIF.
-  IF ls_header-cin IS INITIAL.
+  IF ls_header-exp_cin IS INITIAL.
     PERFORM add_msg USING 'W' '049' 'CIN No.' space space space CHANGING lt_msg.
   ENDIF.
-  IF ls_header-iec IS INITIAL.
+  IF ls_header-exp_iec IS INITIAL.
     PERFORM add_msg USING 'W' '049' 'IEC (Exporter''s Ref.)' space space space CHANGING lt_msg.
   ENDIF.
 
-  " ---- Description of goods (B42) and line items (B47-B58) -------------
-  PERFORM goods_lines   USING is_pl lt_vbrp CHANGING lt_goods.
-  PERFORM resolve_items USING is_pl lt_vbrp lt_goods CHANGING lt_items lt_headings lt_msg.
+  " ---- Consignee (ship-to, B26-B29) and buyer (sold-to, B20-B23) ---------
+  " Contact person and FAX are not in the logic sheet - left empty (Q09)
+  PERFORM party_data USING ls_ship_to CHANGING ls_party lt_msg.
+  ls_header-cns_name    = ls_party-name.
+  ls_header-cns_address = ls_party-address.
+  ls_header-cns_tel     = ls_party-tel.
+  ls_header-cns_mobile  = ls_party-mobile.
+  ls_header-cns_email   = ls_party-email.
 
-  PERFORM calc_totals USING lt_items CHANGING ls_totals.
-  ls_header-tot_art_txt = |{ ls_totals-articles }|.
-  PERFORM format_quantity USING ls_totals-quantity CHANGING lv_text.
-  ls_header-tot_qty_txt = lv_text.
-  PERFORM format_weight USING ls_totals-gross CHANGING lv_text.
-  ls_header-tot_gwt_txt = lv_text.
-  PERFORM format_weight USING ls_totals-net CHANGING lv_text.
-  ls_header-tot_nwt_txt = lv_text.
-  PERFORM total_text USING ls_totals CHANGING lv_text.
-  ls_header-tot_text = |({ lv_text })|.
+  PERFORM party_data USING ls_sold_to CHANGING ls_party lt_msg.
+  ls_header-buy_name    = ls_party-name.
+  ls_header-buy_address = ls_party-address.
+  ls_header-buy_tel     = ls_party-tel.
+  ls_header-buy_mobile  = ls_party-mobile.
+  ls_header-buy_email   = ls_party-email.
+  ls_header-same_party  = xsdbool( ls_sold_to-kunnr = ls_ship_to-kunnr ).
 
-  " ---- Text blocks -----------------------------------------------------
-  PERFORM exporter_lines USING ls_t001-adrnr ls_header-gstin CHANGING lt_lines lt_msg.
-  PERFORM append_block USING 'EXPORTER' lt_lines CHANGING lt_texts.
+  " ---- Notify parties 1-5 - logic B31 ------------------------------------
+  PERFORM text_block USING is_pl-header-zsd_np1 CHANGING ls_header-np1.
+  PERFORM text_block USING is_pl-header-zsd_np2 CHANGING ls_header-np2.
+  PERFORM text_block USING is_pl-header-zsd_np3 CHANGING ls_header-np3.
+  PERFORM text_block USING is_pl-header-zsd_np4 CHANGING ls_header-np4.
+  PERFORM text_block USING is_pl-header-zsd_np5 CHANGING ls_header-np5.
 
-  PERFORM party_lines USING ls_sold_to CHANGING lt_lines lt_msg.
-  PERFORM append_block USING 'SOLDTO' lt_lines CHANGING lt_texts.
-
-  PERFORM party_lines USING ls_ship_to CHANGING lt_lines lt_msg.
-  PERFORM append_block USING 'SHIPTO' lt_lines CHANGING lt_texts.
-
-  " Logic B31 - notify parties 1-5
-  DO gc_max_np TIMES.
-    lv_block = |NP{ sy-index }|.
-    ASSIGN COMPONENT |ZSD_NP{ sy-index }| OF STRUCTURE is_pl-header TO FIELD-SYMBOL(<lv_np>).
-    IF sy-subrc = 0.
-      PERFORM split_lines USING <lv_np> CHANGING lt_lines.
-      PERFORM append_block USING lv_block lt_lines CHANGING lt_texts.
-    ENDIF.
-  ENDDO.
-
+  " ---- References and countries - logic B13, B14, B16, B17 --------------
   PERFORM order_reference USING lt_vbrp CHANGING lt_lines lt_msg.
-  PERFORM append_block USING 'ORDERREF' lt_lines CHANGING lt_texts.
+  ls_header-order_ref = concat_lines_of( table = lt_lines sep = cl_abap_char_utilities=>newline ).
 
-  " Logic B14 - Buyer's reference no. & date
   lv_buyer_ref = condense( CONV string( is_pl-header-zsd_party_ref ) ).
   IF is_pl-header-zsd_ref_dt IS NOT INITIAL.
     PERFORM format_date USING is_pl-header-zsd_ref_dt CHANGING lv_text.
-    lv_buyer_ref = |{ lv_buyer_ref } DATE: { lv_text }|.
+    lv_buyer_ref = condense( |{ lv_buyer_ref } DATE: { lv_text }| ).
   ENDIF.
-  PERFORM split_lines USING lv_buyer_ref CHANGING lt_lines.
-  PERFORM append_block USING 'BUYERREF' lt_lines CHANGING lt_texts.
+  ls_header-buyer_ref = lv_buyer_ref.
 
-  " Logic B43 / B44 - payment term text (lowest ZTAGG), Incoterms 1 + 2
+  ls_header-cnty_orgn = is_pl-header-zsd_cnty_orgn.
+  PERFORM country_text USING ls_ship_adr-country CHANGING lv_text.
+  ls_header-cnty_dest = lv_text.
+
+  " ---- Shipping - logic B33-B38 ------------------------------------------
+  ls_header-pre_carr  = is_pl-header-zsd_prec.
+  ls_header-rec_place = is_pl-header-zsd_rec_pc.
+  ls_header-vessel    = is_pl-header-zsd_vsl_flt.
+  ls_header-pol       = is_pl-header-zsd_pol.
+  ls_header-pod       = is_pl-header-zsd_pod.
+  ls_header-pld       = is_pl-header-zsd_pld.
+
+  " ---- Terms - logic B43 (payment term text, lowest ZTAGG), B44 ----------
   LOOP AT gt_tvzbt INTO DATA(ls_tvzbt) WHERE zterm = ls_vbrk-zterm.
     lv_vtext = ls_tvzbt-vtext.
     EXIT.
   ENDLOOP.
-  CLEAR lt_lines.
-  APPEND |PAYMENT TERM: { COND string( WHEN lv_vtext IS NOT INITIAL THEN lv_vtext ELSE ls_vbrk-zterm ) }| TO lt_lines.
-  APPEND condense( |TERMS OF SHIPMENT :- { ls_vbrk-inco1 } { ls_vbrk-inco2 }| ) TO lt_lines.
-  PERFORM append_block USING 'PAYMENT' lt_lines CHANGING lt_texts.
+  ls_header-pay_terms  = |PAYMENT TERM: { COND string( WHEN lv_vtext IS NOT INITIAL THEN lv_vtext ELSE ls_vbrk-zterm ) }|.
+  ls_header-ship_terms = condense( |{ ls_vbrk-inco1 } { ls_vbrk-inco2 }| ).
 
-  " Logic B39 / B40 / B41 / B42 / B61
-  PERFORM split_lines USING is_pl-header-zsd_mark CHANGING lt_lines.
-  PERFORM append_block USING 'MARKS' lt_lines CHANGING lt_texts.
-  PERFORM split_lines USING is_pl-header-zsd_cont CHANGING lt_lines.
-  PERFORM append_block USING 'CONTAINER' lt_lines CHANGING lt_texts.
-  PERFORM split_lines USING is_pl-header-zsd_nopack CHANGING lt_lines.
-  PERFORM append_block USING 'PACKAGES' lt_lines CHANGING lt_texts.
-  PERFORM append_block USING 'GOODS' lt_goods CHANGING lt_texts.
-  PERFORM split_lines USING is_pl-header-zsd_pl_decl CHANGING lt_lines.
-  PERFORM append_block USING 'DECL' lt_lines CHANGING lt_texts.
+  " ---- Description of goods (B42) and line items (B47-B58) --------------
+  PERFORM goods_lines   USING is_pl lt_vbrp CHANGING lt_goods.
+  PERFORM resolve_items USING is_pl lt_vbrp lt_goods CHANGING lt_items lt_headings lt_msg.
+  ls_header-goods_desc = concat_lines_of( table = lt_goods sep = cl_abap_char_utilities=>newline ).
+
+  " ---- Marks, containers, packages - logic B39-B41 -----------------------
+  PERFORM calc_totals USING lt_items CHANGING ls_totals.
+  PERFORM text_block USING is_pl-header-zsd_mark CHANGING ls_header-marks.
+  PERFORM text_block USING is_pl-header-zsd_cont CHANGING ls_header-containers.
+  PERFORM text_block USING is_pl-header-zsd_nopack CHANGING ls_header-no_pkgs.
+  IF ls_header-no_pkgs IS INITIAL.
+    PERFORM packages_text USING ls_totals CHANGING ls_header-no_pkgs.
+  ENDIF.
+
+  " ---- Totals row and declaration (B52, B61) -----------------------------
+  ls_header-tot_art = |{ ls_totals-articles }|.
+  PERFORM format_quantity USING ls_totals-quantity CHANGING lv_text.
+  ls_header-tot_qty = lv_text.
+  PERFORM format_weight USING ls_totals-gross CHANGING lv_text.
+  ls_header-tot_gwt = lv_text.
+  PERFORM format_weight USING ls_totals-net CHANGING lv_text.
+  ls_header-tot_nwt = lv_text.
+  PERFORM total_text USING ls_totals CHANGING lv_text.
+  ls_header-tot_text = |({ lv_text })|.
+  PERFORM text_block USING is_pl-header-zsd_pl_decl CHANGING ls_header-declaration.
 
   cs_result-bukrs        = ls_vbrk-bukrs.
   cs_result-print-header = ls_header.
-  cs_result-print-texts  = lt_texts.
   PERFORM build_print_items USING lt_items lt_headings CHANGING cs_result-print-items.
 
   cs_result-messages = lt_msg.
@@ -1208,7 +1197,7 @@ FORM build_one USING    is_pl     TYPE ty_packing_list
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Invoices exist, are not cancelled, have an allowed billing type
+*& Invoices exist and are not cancelled
 *&---------------------------------------------------------------------*
 FORM check_invoices USING    is_pl       TYPE ty_packing_list
                     CHANGING ct_vbrk     TYPE ty_vbrk_list
@@ -1227,10 +1216,6 @@ FORM check_invoices USING    is_pl       TYPE ty_packing_list
     ENDIF.
     IF ls_vbrk-fksto = abap_true OR ls_vbrk-sfakn IS NOT INITIAL.
       PERFORM add_msg USING 'E' '009' lv_ext space space space CHANGING ct_messages.
-      CONTINUE.
-    ENDIF.
-    IF gr_fkart IS NOT INITIAL AND ls_vbrk-fkart NOT IN gr_fkart.
-      PERFORM add_msg USING 'E' '010' lv_ext ls_vbrk-fkart space space CHANGING ct_messages.
       CONTINUE.
     ENDIF.
     INSERT ls_vbrk INTO TABLE ct_vbrk.
@@ -1292,7 +1277,7 @@ FORM check_consistency USING    it_vbrk     TYPE ty_vbrk_list
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Print authorization per company code and sales org. (A24), buffered
+*& Print authorization per sales org. of the invoices (V_VBRK_VKO), buffered
 *&---------------------------------------------------------------------*
 FORM check_authority USING    it_vbrk     TYPE ty_vbrk_list
                      CHANGING ct_messages TYPE bapiret2_t.
@@ -1301,18 +1286,6 @@ FORM check_authority USING    it_vbrk     TYPE ty_vbrk_list
   DATA lt_msg  TYPE bapiret2_t.
 
   LOOP AT it_vbrk INTO DATA(ls_vbrk).
-
-    READ TABLE gt_auth INTO ls_auth WITH TABLE KEY object = gc_auth_object value = ls_vbrk-bukrs.
-    IF sy-subrc <> 0.
-      AUTHORITY-CHECK OBJECT gc_auth_object
-        ID 'ACTVT' FIELD gc_actvt_print
-        ID 'BUKRS' FIELD ls_vbrk-bukrs.
-      ls_auth = VALUE #( object = gc_auth_object value = ls_vbrk-bukrs ok = xsdbool( sy-subrc = 0 ) ).
-      INSERT ls_auth INTO TABLE gt_auth.
-    ENDIF.
-    IF ls_auth-ok = abap_false.
-      PERFORM add_msg USING 'E' '012' 'Company code' ls_vbrk-bukrs gc_actvt_print space CHANGING lt_msg.
-    ENDIF.
 
     READ TABLE gt_auth INTO ls_auth WITH TABLE KEY object = 'V_VBRK_VKO' value = ls_vbrk-vkorg.
     IF sy-subrc <> 0.
@@ -1386,14 +1359,11 @@ FORM get_partner USING    is_vbrk     TYPE ty_vbrk
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& FS 1.1: format with notify party when notify parties are maintained
-*& (A05). A manual "without" while notify parties exist is an error.
+*& FS 1.1: one Adobe Form; it shows the notify-party section when notify
+*& parties are maintained (A05)
 *&---------------------------------------------------------------------*
-FORM determine_form USING    is_header   TYPE ty_header
-                             iv_format   TYPE char1
-                    CHANGING cv_form     TYPE tdsfname
-                             cv_np_count TYPE i
-                             ct_messages TYPE bapiret2_t.
+FORM count_notify_parties USING    is_header   TYPE ty_header
+                          CHANGING cv_np_count TYPE i.
 
   cv_np_count = 0.
   DO gc_max_np TIMES.
@@ -1402,18 +1372,6 @@ FORM determine_form USING    is_header   TYPE ty_header
       cv_np_count = cv_np_count + 1.
     ENDIF.
   ENDDO.
-
-  CASE iv_format.
-    WHEN gc_fmt_with.
-      cv_form = gc_form_with.
-    WHEN gc_fmt_wout.
-      IF cv_np_count > 0.
-        PERFORM add_msg USING 'E' '013' is_header-zsd_packno space space space CHANGING ct_messages.
-      ENDIF.
-      cv_form = gc_form_wout.
-    WHEN OTHERS.
-      cv_form = COND #( WHEN cv_np_count > 0 THEN gc_form_with ELSE gc_form_wout ).
-  ENDCASE.
 
 ENDFORM.
 
@@ -1603,19 +1561,19 @@ FORM order_reference USING    it_vbrp     TYPE ty_vbrp_tab
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Logic B3-B5: NAME1, STREET, STR_SUPPL1, CITY1, POST_CODE1, REGION text,
-*& COUNTRY text; B6 GST No. under the exporter as in the samples
+*& Logic B3-B5: NAME1; address = STREET, STR_SUPPL1, CITY1 - POST_CODE1,
+*& REGION text, COUNTRY text (GST No. B6 is a separate header field)
 *&---------------------------------------------------------------------*
-FORM exporter_lines USING    iv_adrnr    TYPE adrnr
-                             iv_gstin    TYPE csequence
-                    CHANGING ct_lines    TYPE ty_text_tab
-                             ct_messages TYPE bapiret2_t.
+FORM exporter_data USING    iv_adrnr    TYPE adrnr
+                   CHANGING cs_party    TYPE ty_party_data
+                            ct_messages TYPE bapiret2_t.
 
+  DATA lt_lines   TYPE ty_text_tab.
   DATA lt_parts   TYPE ty_text_tab.
   DATA lv_text    TYPE string.
   DATA lv_country TYPE string.
 
-  CLEAR ct_lines.
+  CLEAR cs_party.
 
   READ TABLE gt_adrc INTO DATA(ls_adr) WITH TABLE KEY addrnumber = iv_adrnr.
   IF sy-subrc <> 0.
@@ -1623,9 +1581,10 @@ FORM exporter_lines USING    iv_adrnr    TYPE adrnr
     RETURN.
   ENDIF.
 
-  APPEND CONV string( ls_adr-name1 )      TO ct_lines.
-  APPEND CONV string( ls_adr-street )     TO ct_lines.
-  APPEND CONV string( ls_adr-str_suppl1 ) TO ct_lines.
+  cs_party-name = ls_adr-name1.
+
+  APPEND CONV string( ls_adr-street )     TO lt_lines.
+  APPEND CONV string( ls_adr-str_suppl1 ) TO lt_lines.
 
   READ TABLE gt_t005u INTO DATA(ls_t005u) WITH TABLE KEY land1 = ls_adr-country bland = ls_adr-region.
   IF sy-subrc <> 0.
@@ -1637,13 +1596,10 @@ FORM exporter_lines USING    iv_adrnr    TYPE adrnr
                       ( to_upper( ls_t005u-bezei ) )
                       ( lv_country ) ).
   PERFORM join_parts USING lt_parts `, ` CHANGING lv_text.
-  APPEND lv_text TO ct_lines.
+  APPEND lv_text TO lt_lines.
 
-  IF iv_gstin IS NOT INITIAL.
-    APPEND |GST NO. { iv_gstin }| TO ct_lines.
-  ENDIF.
-
-  DELETE ct_lines WHERE table_line IS INITIAL.
+  DELETE lt_lines WHERE table_line IS INITIAL.
+  cs_party-address = concat_lines_of( table = lt_lines sep = cl_abap_char_utilities=>newline ).
 
 ENDFORM.
 
@@ -1651,18 +1607,15 @@ ENDFORM.
 *& Logic B20-B23 / B26-B29: NAME1, STREET, STR_SUPPL1, CITY1, CITY2,
 *& POST_CODE1, COUNTRY text; e-mail; telephone (R3_USER 1) / mobile (3)
 *&---------------------------------------------------------------------*
-FORM party_lines USING    is_partner  TYPE ty_partner
-                 CHANGING ct_lines    TYPE ty_text_tab
-                          ct_messages TYPE bapiret2_t.
+FORM party_data USING    is_partner  TYPE ty_partner
+                CHANGING cs_party    TYPE ty_party_data
+                         ct_messages TYPE bapiret2_t.
 
   DATA lt_parts   TYPE ty_text_tab.
   DATA lv_text    TYPE string.
   DATA lv_country TYPE string.
-  DATA lv_tel     TYPE string.
-  DATA lv_mob     TYPE string.
-  DATA lv_mail    TYPE string.
 
-  CLEAR ct_lines.
+  CLEAR cs_party.
 
   READ TABLE gt_adrc INTO DATA(ls_adr) WITH TABLE KEY addrnumber = is_partner-adrnr.
   IF sy-subrc <> 0.
@@ -1673,7 +1626,7 @@ FORM party_lines USING    is_partner  TYPE ty_partner
     RETURN.
   ENDIF.
 
-  APPEND CONV string( ls_adr-name1 ) TO ct_lines.
+  cs_party-name = ls_adr-name1.
 
   PERFORM country_text USING ls_adr-country CHANGING lv_country.
   lt_parts = VALUE #( ( CONV #( ls_adr-street ) )
@@ -1681,42 +1634,26 @@ FORM party_lines USING    is_partner  TYPE ty_partner
                       ( CONV #( ls_adr-city2 ) )
                       ( condense( |{ ls_adr-post_code1 } { ls_adr-city1 }| ) )
                       ( lv_country ) ).
-  PERFORM join_parts USING lt_parts `, ` CHANGING lv_text.
-  APPEND lv_text TO ct_lines.
+  PERFORM join_parts USING lt_parts `, ` CHANGING cs_party-address.
 
   " Default number first, else the first one found (A30)
   LOOP AT gt_adr2 INTO DATA(ls_adr2) WHERE addrnumber = is_partner-adrnr.
     CASE ls_adr2-r3_user.
       WHEN '1'.
-        IF lv_tel IS INITIAL OR ls_adr2-flgdefault = abap_true.
-          lv_tel = ls_adr2-telnr_long.
+        IF cs_party-tel IS INITIAL OR ls_adr2-flgdefault = abap_true.
+          cs_party-tel = ls_adr2-telnr_long.
         ENDIF.
       WHEN '3'.
-        IF lv_mob IS INITIAL OR ls_adr2-flgdefault = abap_true.
-          lv_mob = ls_adr2-telnr_long.
+        IF cs_party-mobile IS INITIAL OR ls_adr2-flgdefault = abap_true.
+          cs_party-mobile = ls_adr2-telnr_long.
         ENDIF.
     ENDCASE.
   ENDLOOP.
   LOOP AT gt_adr6 INTO DATA(ls_adr6) WHERE addrnumber = is_partner-adrnr.
-    IF lv_mail IS INITIAL OR ls_adr6-flgdefault = abap_true.
-      lv_mail = ls_adr6-smtp_addr.
+    IF cs_party-email IS INITIAL OR ls_adr6-flgdefault = abap_true.
+      cs_party-email = ls_adr6-smtp_addr.
     ENDIF.
   ENDLOOP.
-
-  CLEAR lt_parts.
-  IF lv_tel IS NOT INITIAL.
-    APPEND |TEL.: { lv_tel }| TO lt_parts.
-  ENDIF.
-  IF lv_mob IS NOT INITIAL.
-    APPEND |MO : { lv_mob }| TO lt_parts.
-  ENDIF.
-  PERFORM join_parts USING lt_parts ` ` CHANGING lv_text.
-  APPEND lv_text TO ct_lines.
-  IF lv_mail IS NOT INITIAL.
-    APPEND |E-MAIL : { lv_mail }| TO ct_lines.
-  ENDIF.
-
-  DELETE ct_lines WHERE table_line IS INITIAL.
 
 ENDFORM.
 
@@ -1765,7 +1702,7 @@ FORM steuc_of USING    iv_hsn   TYPE csequence
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Step 3: one Smart Form per packing list number. An error is logged on
+*& Step 3: one Adobe Form per packing list number. An error is logged on
 *& that packing list and the loop continues with the next one.
 *&---------------------------------------------------------------------*
 FORM output_forms.
@@ -1806,7 +1743,7 @@ FORM output_forms.
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Call the Smart Form for one packing list (preview / print / PDF)
+*& Call the Adobe Form for one packing list (preview / print / PDF)
 *&---------------------------------------------------------------------*
 FORM send_form USING    is_print    TYPE ty_print_data
                         iv_output   TYPE char1
@@ -1814,28 +1751,27 @@ FORM send_form USING    is_print    TYPE ty_print_data
                CHANGING cv_done     TYPE abap_bool
                         ct_messages TYPE bapiret2_t.
 
-  DATA lv_fm      TYPE rs38l_fnam.
-  DATA ls_job     TYPE ssfcrescl.
-  DATA ls_control TYPE ssfctrlop.
-  DATA ls_options TYPE ssfcompop.
+  DATA lv_fm      TYPE funcname.
+  DATA ls_outpar  TYPE sfpoutputparams.
+  DATA ls_docpar  TYPE sfpdocparams.
+  DATA ls_formout TYPE fpformoutput.
   DATA lv_dest    TYPE rspopname.
+  DATA lv_subrc   TYPE sysubrc.
   DATA lv_ok      TYPE abap_bool.
 
   cv_done = abap_false.
 
-  CALL FUNCTION 'SSF_FUNCTION_MODULE_NAME'
-    EXPORTING
-      formname           = is_print-form
-    IMPORTING
-      fm_name            = lv_fm
-    EXCEPTIONS
-      no_form            = 1
-      no_function_module = 2
-      OTHERS             = 3.
-  IF sy-subrc <> 0.
-    PERFORM add_msg USING 'E' '040' is_print-form space space space CHANGING ct_messages.
-    RETURN.
-  ENDIF.
+  " Generated function module of the Adobe Form
+  TRY.
+      CALL FUNCTION 'FP_FUNCTION_MODULE_NAME'
+        EXPORTING
+          i_name     = is_print-form
+        IMPORTING
+          e_funcname = lv_fm.
+    CATCH cx_fp_api.
+      PERFORM add_msg USING 'E' '040' is_print-form space space space CHANGING ct_messages.
+      RETURN.
+  ENDTRY.
 
   " Output device: selection screen, else the user's default printer
   " (read once per run), else LOCL
@@ -1850,44 +1786,65 @@ FORM send_form USING    is_print    TYPE ty_print_data
     lv_dest = gv_default_dest.
   ENDIF.
 
-  ls_control-no_dialog = abap_true.
-  ls_control-preview   = xsdbool( iv_output = gc_out_preview ).
-  ls_control-getotf    = xsdbool( iv_output = gc_out_pdf ).
+  ls_outpar-nodialog = abap_true.
+  ls_outpar-preview  = xsdbool( iv_output = gc_out_preview ).
+  ls_outpar-getpdf   = xsdbool( iv_output = gc_out_pdf ).
+  ls_outpar-reqimm   = xsdbool( iv_output = gc_out_print ).
+  ls_outpar-reqnew   = abap_true.
+  ls_outpar-dest     = lv_dest.
+  ls_outpar-copies   = COND #( WHEN p_copy IS INITIAL THEN 1 ELSE p_copy ).
 
-  ls_options-tddest   = lv_dest.
-  ls_options-tdcopies = COND #( WHEN p_copy IS INITIAL THEN 1 ELSE p_copy ).
-  ls_options-tdimmed  = xsdbool( iv_output = gc_out_print ).
-  ls_options-tdnewid  = abap_true.
+  " One job per packing list: one preview / spool request / PDF each
+  CALL FUNCTION 'FP_JOB_OPEN'
+    CHANGING
+      ie_outputparams = ls_outpar
+    EXCEPTIONS
+      cancel          = 1
+      usage_error     = 2
+      system_error    = 3
+      internal_error  = 4
+      OTHERS          = 5.
+  IF sy-subrc = 1.
+    RETURN.                                         " cancelled by the user
+  ELSEIF sy-subrc <> 0.
+    lv_subrc = sy-subrc.
+    PERFORM add_msg USING 'E' '039' lv_subrc 'FP_JOB_OPEN' space space CHANGING ct_messages.
+    RETURN.
+  ENDIF.
 
-  " Form interface: IS_HEADER / IT_TEXT / IT_ITEM of THIS packing list
+  ls_docpar-langu   = gc_langu.
+  ls_docpar-country = gc_hsn_country.
+
+  " Form interface ZSD_EPACK_AF_IF: IS_HEADER / IT_ITEM of THIS packing list
   CALL FUNCTION lv_fm
     EXPORTING
-      control_parameters = ls_control
-      output_options     = ls_options
-      user_settings      = space
+      /1bcdwb/docparams  = ls_docpar
       is_header          = is_print-header
-      it_text            = is_print-texts
       it_item            = is_print-items
     IMPORTING
-      job_output_info    = ls_job
+      /1bcdwb/formoutput = ls_formout
     EXCEPTIONS
-      formatting_error   = 1
-      internal_error     = 2
-      send_error         = 3
-      user_canceled      = 4
-      OTHERS             = 5.
+      usage_error        = 1
+      system_error       = 2
+      internal_error     = 3
+      OTHERS             = 4.
+  lv_subrc = sy-subrc.
 
-  CASE sy-subrc.
-    WHEN 0.
-    WHEN 4.
-      RETURN.                                       " cancelled by the user
-    WHEN OTHERS.
-      PERFORM add_msg USING 'E' '039' sy-subrc is_print-form space space CHANGING ct_messages.
-      RETURN.
-  ENDCASE.
+  " The job is closed in every case
+  CALL FUNCTION 'FP_JOB_CLOSE'
+    EXCEPTIONS
+      usage_error    = 1
+      system_error   = 2
+      internal_error = 3
+      OTHERS         = 4.
+
+  IF lv_subrc <> 0.
+    PERFORM add_msg USING 'E' '039' lv_subrc is_print-form space space CHANGING ct_messages.
+    RETURN.
+  ENDIF.
 
   IF iv_output = gc_out_pdf.
-    PERFORM download_pdf USING ls_job-otfdata iv_pdf_path CHANGING lv_ok ct_messages.
+    PERFORM download_pdf USING ls_formout-pdf iv_pdf_path CHANGING lv_ok ct_messages.
     IF lv_ok = abap_false.
       RETURN.
     ENDIF.
@@ -1898,43 +1855,25 @@ FORM send_form USING    is_print    TYPE ty_print_data
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& OTF -> PDF -> file on the PC
+*& PDF of the Adobe Form -> file on the PC
 *&---------------------------------------------------------------------*
-FORM download_pdf USING    it_otf      TYPE tsfotf
+FORM download_pdf USING    iv_pdf      TYPE xstring
                            iv_path     TYPE string
                   CHANGING cv_ok       TYPE abap_bool
                            ct_messages TYPE bapiret2_t.
 
   DATA lv_size  TYPE i.
-  DATA lv_pdf   TYPE xstring.
-  DATA lt_lines TYPE STANDARD TABLE OF tline WITH EMPTY KEY.
-  DATA lt_otf   TYPE tsfotf.
   DATA lt_solix TYPE solix_tab.
 
-  cv_ok  = abap_false.
-  lt_otf = it_otf.
+  cv_ok = abap_false.
 
-  CALL FUNCTION 'CONVERT_OTF'
-    EXPORTING
-      format                = 'PDF'
-    IMPORTING
-      bin_filesize          = lv_size
-      bin_file              = lv_pdf
-    TABLES
-      otf                   = lt_otf
-      lines                 = lt_lines
-    EXCEPTIONS
-      err_max_linewidth     = 1
-      err_format            = 2
-      err_conv_not_possible = 3
-      err_bad_otf           = 4
-      OTHERS                = 5.
-  IF sy-subrc <> 0.
-    PERFORM add_msg USING 'E' '039' sy-subrc 'CONVERT_OTF' space space CHANGING ct_messages.
+  IF iv_pdf IS INITIAL.
+    PERFORM add_msg USING 'E' '039' '0' 'PDF' space space CHANGING ct_messages.
     RETURN.
   ENDIF.
 
-  lt_solix = cl_bcs_convert=>xstring_to_solix( lv_pdf ).
+  lv_size  = xstrlen( iv_pdf ).
+  lt_solix = cl_bcs_convert=>xstring_to_solix( iv_pdf ).
 
   cl_gui_frontend_services=>gui_download(
     EXPORTING  bin_filesize = lv_size
@@ -1990,35 +1929,9 @@ FORM save_packing_lists.
   DATA ls_totals TYPE ty_totals.
   DATA lv_ok     TYPE abap_bool.
 
-  " Which packing lists may be saved
-  LOOP AT gt_result ASSIGNING FIELD-SYMBOL(<ls_result>) WHERE output = abap_true.
-
-    AUTHORITY-CHECK OBJECT gc_auth_object
-      ID 'ACTVT' FIELD gc_actvt_save
-      ID 'BUKRS' FIELD <ls_result>-bukrs.
-    IF sy-subrc <> 0.
-      PERFORM add_msg USING 'W' '012' 'Company code' <ls_result>-bukrs gc_actvt_save space
-                      CHANGING <ls_result>-messages.
-      CONTINUE.
-    ENDIF.
-
-    " Lock against a parallel run for the same packing list
-    CALL FUNCTION 'ENQUEUE_EZSD_EPACK'
-      EXPORTING
-        mode_zsd_epack_data = 'E'
-        mandt               = sy-mandt
-        zsd_packno          = <ls_result>-packno
-      EXCEPTIONS
-        foreign_lock        = 1
-        system_failure      = 2
-        OTHERS              = 3.
-    IF sy-subrc <> 0.
-      PERFORM add_msg USING 'W' '014' <ls_result>-packno sy-msgv1 space space CHANGING <ls_result>-messages.
-      CONTINUE.
-    ENDIF.
-    INSERT <ls_result>-packno INTO TABLE gt_locked.
-
-    APPEND VALUE #( sign = 'I' option = 'EQ' low = <ls_result>-packno ) TO lr_packno.
+  " Packing lists whose form was produced
+  LOOP AT gt_result INTO DATA(ls_result) WHERE output = abap_true.
+    APPEND VALUE #( sign = 'I' option = 'EQ' low = ls_result-packno ) TO lr_packno.
   ENDLOOP.
 
   IF lr_packno IS INITIAL.
@@ -2071,7 +1984,7 @@ FORM save_packing_lists.
   lv_ok = xsdbool( sy-subrc = 0 ).
 
   LOOP AT lr_packno INTO ls_packno.
-    READ TABLE gt_result ASSIGNING <ls_result> WITH TABLE KEY packno = ls_packno-low.
+    READ TABLE gt_result ASSIGNING FIELD-SYMBOL(<ls_result>) WITH TABLE KEY packno = ls_packno-low.
     IF lv_ok = abap_true.
       <ls_result>-saved = abap_true.
       PERFORM add_msg USING 'S' '032' ls_packno-low <ls_result>-item_count <ls_result>-inv_count space
@@ -2089,20 +2002,11 @@ FORM save_packing_lists.
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& One COMMIT WORK, then release the locks
+*& One COMMIT WORK for the log table
 *&---------------------------------------------------------------------*
 FORM finish_db.
 
   COMMIT WORK AND WAIT.
-
-  LOOP AT gt_locked INTO DATA(lv_packno).
-    CALL FUNCTION 'DEQUEUE_EZSD_EPACK'
-      EXPORTING
-        mode_zsd_epack_data = 'E'
-        mandt               = sy-mandt
-        zsd_packno          = lv_packno.
-  ENDLOOP.
-  CLEAR gt_locked.
 
 ENDFORM.
 
@@ -2150,8 +2054,8 @@ FORM show_result.
   TYPES: BEGIN OF ty_line,
            icon    TYPE icon_d,
            packno  TYPE zsd_packno,
-           status  TYPE zsd_epack_status,
-           form    TYPE tdsfname,
+           status  TYPE char1,
+           form    TYPE fpname,
            inv     TYPE i,
            items   TYPE i,
            output  TYPE xfeld,

@@ -1,7 +1,7 @@
 # WRICEF 102-B Export Packing List — development status and assumptions
 
-**Version 3 (procedural program).** This version covers the Excel-upload report `ZSD_EPACK`: one form per
-packing list, then saving and logging. The assumptions below are referenced in the source code as `Axx`.
+**Version 3 (procedural program).** This version covers the Excel-upload report `ZSD_EPACK_PRINT`: one Adobe Form
+per packing list, then the log table. The assumptions below are referenced in the source code as `Axx`.
 The open questions that decide them are in `Packing_List_Report_Design.md` §4 (`Qxx`).
 The requirement analysis with all 43 original clarifications is in
 `Packing_List_Requirement_Analysis_and_Development_Approach.md`.
@@ -10,13 +10,13 @@ The requirement analysis with all 43 original clarifications is in
 
 | Deliverable | File | Status |
 |---|---|---|
-| Report (T-code `ZSD_EPACK`) — procedural, no custom classes | `src/ZSD_EPACK_PRINT.prog.abap` | Code complete |
+| Report (SE38, no transaction for now) — procedural, no custom classes | `src/ZSD_EPACK_PRINT.prog.abap` | Code complete |
 | Include: types, constants, global data | `src/ZSD_EPACK_PRINT_TOP.prog.abap` | Code complete |
 | Include: selection screen | `src/ZSD_EPACK_PRINT_SEL.prog.abap` | Code complete |
 | Include: upload, data retrieval, forms, log table | `src/ZSD_EPACK_PRINT_F01.prog.abap` | Code complete |
 | Include: package groups, weight rule, totals, formatting | `src/ZSD_EPACK_PRINT_F02.prog.abap` | Code complete |
-| DDIC (log table `ZSD_EPACK_DATA`), messages, auth | `src/DDIC_and_Repository_Objects.md` | Specification |
-| Smart Forms | `docs/ZSD_EPACK_SmartForm_Specification.md` | Build specification |
+| DDIC (log table `ZSD_EPACK_DATA`), Adobe structures, messages | `src/DDIC_and_Repository_Objects.md` | Specification |
+| Adobe Form `ZSD_EPACK_AF` (interface, structures, layout) | `src/Adobe_Form_Interface_Structures.md` | Specification |
 | Design, mapping, test plan | `docs/Packing_List_Report_Design.md` | Done |
 | Upload template + example | `templates/ZSD_EPACK_Upload_Template_v2.xlsx` | Done |
 
@@ -33,13 +33,13 @@ example sheet: 77 lines, totals 4074 / 12146 / 116323.800 / 115386.780, matching
 |---|---|---|---|
 | A01 | An invoice may belong to only one packing list in a file. If it appears under two, both packing lists get an error. | FS silent | Q02 |
 | A04 | All invoices of one packing list must agree on company code, business place, sold-to, sales area, payment terms and Incoterms. Otherwise the packing list is rejected. No "first invoice" is chosen. | Logic sheet reads one VBRK; the user asked not to pick an arbitrary invoice | Q04 |
-| A05 | The format is chosen automatically: "with notify party" when any notify party is uploaded. A manual choice of "without" while notify parties exist is an error. | FS 1.1 (labels a/b contradict) | — |
+| A05 | One Adobe Form for both formats: the notify-party section is shown when any notify party is uploaded, otherwise hidden. No format choice on the selection screen. | FS 1.1 (labels a/b contradict); user decision | — |
 | A06 | Package groups: merged Excel cells (an empty Articles / Gross + Net cell belongs to the group above) **or** values repeated on each row with the same Article No. (business sample file) count as one package. | Template merged ranges, samples, `Sample_data_ABAP.xlsx` | Q13 |
 | A07 | GW ≥ NW is checked per weight group, at upload and again before output. An error means no form for that packing list. | FS 2.1 | Q13 |
 | A08 | Total Articles is calculated (Σ Articles). Quantity ≠ STD × Articles gives a warning only. | Template has no `ZSD_TART` column | Q12 |
 | A09 | Optional column AL "Package Type" drives the subtotal rows and the total text. | Sample 90000014 | Q18 |
 | A10 | Notify parties must be filled from 1 upwards. | Form layout | — |
-| A11 | TVARVC `ZSD_EPACK_FKART` limits the billing types. If it is empty, all types are accepted. Cancelled invoices are always rejected. | FS silent | Q22 |
+| A11 | All billing types are accepted for now (no TVARVC filter). Cancelled invoices are always rejected. | FS silent | Q22 |
 | A14 | Description of goods: Excel column AG if filled, else Logic B42 (VBRP→MARC→T604N, clubbed). | Logic B42 vs Technical detail `ZSD_HSN_DESC` | Q05 |
 | A15 | One "CONSIGNEE" block when sold-to = ship-to (sample 90000014). Contact person, FAX and tax number are **not** printed (not in the Logic sheet). | Samples vs Logic sheet | Q09 |
 | A17 | Order No. & Date: all distinct quotation references and dates of the packing list's sales orders, joined with " & ". If an order has no quotation, there is a warning and no value. | Logic B13, sample 90000014 | Q06 |
@@ -47,9 +47,9 @@ example sheet: 77 lines, totals 4074 / 12146 / 116323.800 / 115386.780, matching
 | A20 | English texts. Dates DD-MM-YYYY. Weights with 3 decimals. HSN "3917 2390". | Samples | — |
 | A21 | `.xlsx` only, first sheet, read with `CL_FDT_XL_SPREADSHEET`. | Target release | Q21 |
 | A22 | Re-uploading a packing list that is already in the log table replaces its rows (no revision, no history). | FS silent; user: "keep the logic as FS stated" | Q17 |
-| A24 | Authorization object `ZSD_EPACK` (04 print, 01 save, per company code) + `V_VBRK_VKO` 04. | FS 2.3 empty | Q14 |
+| A24 | Only the standard check `V_VBRK_VKO` 04 (per sales org.). No custom authorization object for now. | FS 2.3 empty | Q14 |
 | A25 | Output: preview, print, or PDF into a folder (one file per packing list). The default printer comes from the user master. | FS silent | — |
-| A26–A28 | Layout as the sample PDFs. Unused notify parties are crossed out with a graphic. Group values print on the first line. | FS + samples | Q20 |
+| A26–A28 | Layout as the sample PDFs, in one Adobe Form. Empty notify parties are hidden. Group values print on the first row of the group; borders inside a group are hidden. | FS + samples | Q20 |
 | A29 | S/4HANA, ABAP ≥ 7.54 (same as the other Astral / UDAY developments). | Repository | Q21 |
 | A30 | Several telephone / mobile / e-mail entries: the default entry, else the first one found. | Logic B21–B23 | — |
 | A31 | Partners via KNVP (Logic B20 / B26) with the sales area of the invoice. Several partners: the default (DEFPA), else lowest counter, with a warning. No partner is an error. | Logic sheet | Q07, Q11 |
@@ -70,4 +70,4 @@ example sheet: 77 lines, totals 4074 / 12146 / 116323.800 / 115386.780, matching
 
 The separate upload transaction (`ZSD_EPACK_UPL`, old A23). The IEC override from the Excel
 (old A13). Document partners from VBPA (old A31; the Logic sheet requires KNVP). Contact person, FAX
-and tax number (old A15 / A16). Incoterm text from TINCT (old A18). One packing list per file (old A33). Tables `ZSD_EPACK_HDR` / `ZSD_EPACK_INV` / `ZSD_EPACK_LOG`, revision numbers and the "Saved packing lists" reprint option (one log table only, as in the FS).
+and tax number (old A15 / A16). Incoterm text from TINCT (old A18). One packing list per file (old A33). Tables `ZSD_EPACK_HDR` / `ZSD_EPACK_INV` / `ZSD_EPACK_LOG`, revision numbers and the "Saved packing lists" reprint option (one log table only, as in the FS). Smart Forms `ZSD_EPACK_WITH_NP` / `ZSD_EPACK_WITHOUT_NP` with their structures, style and graphic (replaced by one Adobe Form). Transaction `ZSD_EPACK`, lock object `EZSD_EPACK`, authorization object `ZSD_EPACK`, TVARVC `ZSD_EPACK_FKART` and the format choice on the selection screen (not created for now).

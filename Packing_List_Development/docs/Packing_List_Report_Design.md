@@ -1,10 +1,10 @@
-# Export Packing List report `ZSD_EPACK`: design, field mapping and test plan
+# Export Packing List report `ZSD_EPACK_PRINT`: design, field mapping and test plan
 
 WRICEF 102-B "Export consolidated packing list" · Astral Limited / UDAY / SD
 
 This document covers the Excel-upload report. It reads the packing list Excel file,
 fetches header and line-item data exactly as described in the FS logic sheet,
-and produces **one Smart Form per packing list number**. At the end it writes the data
+and produces **one Adobe Form (`ZSD_EPACK_AF`) per packing list number**. At the end it writes the data
 of every packing list that was output to the log table `ZSD_EPACK_DATA` (one Z table,
 FS "Technical detail" layout, one row per line item, all invoice numbers in one field).
 
@@ -81,7 +81,7 @@ The sample sheet has 77 line items (= PDF 90000081) with totals 4074 articles,
 
 | Output field | Logic | Source table / field | Derivation (FORM in `ZSD_EPACK_PRINT_F01`) |
 |---|---|---|---|
-| Exporter name / address | B3 | `VBRK-BUKRS` → `T001-ADRNR` → `ADRC` `NAME1 STREET STR_SUPPL1 CITY1 POST_CODE1 REGION COUNTRY` | `READ_SAP_DATA` (T001, ADRC once), `EXPORTER_LINES` |
+| Exporter name / address | B3 | `VBRK-BUKRS` → `T001-ADRNR` → `ADRC` `NAME1 STREET STR_SUPPL1 CITY1 POST_CODE1 REGION COUNTRY` | `READ_SAP_DATA` (T001, ADRC once), `EXPORTER_DATA` |
 | Exporter region text | B4 | `T005U-BEZEI` (LAND1 + BLAND = `ADRC-REGION`, SPRAS E) | **Logic says `T005S`**, which has no `BEZEI` field (§3) |
 | Exporter country text | B5 | `T005T-LANDX` (SPRAS E) | **Logic says `T005`**, which has no `LANDX` field (§3) |
 | GST No. | B6 | `J_1BBRANCH-GSTIN` for `VBRK-BUKRS` + `VBRK-BUPLA` | printed in the header box and under the exporter (as in the samples) |
@@ -89,8 +89,8 @@ The sample sheet has 77 line items (= PDF 90000081) with totals 4074 articles,
 | Exporter's Ref. (IEC) | B11 | `ADRC-BUILDING` of the company address | printed "IEC:<value>" (sample). Excel col. O is **not** used (Technical detail: "Not Req – fetched from SAP"). Q08 |
 | Order No. & Date | B13 | `VBRP-AUBEL` → `VBAK-VGBEL` → `VBKD-BSTKD`, `BSTDK` (`VBELN` = VGBEL, `POSNR` 000000) | all distinct values of all INV, "A & B DATE: d1 & d2" (Q06) |
 | Country of final destination | B17 | ship-to `ADRC-COUNTRY` → `T005T-LANDX` | |
-| Sold-to block | B20–B23 | `VBRK-KUNAG` + sales area → `KNVP` (`PARVW` = AG ≙ SP) → `KUNN2` → `KNA1-ADRNR` → `ADRC` `NAME1 STREET STR_SUPPL1 CITY1 CITY2 POST_CODE1 COUNTRY`, `ADR6-SMTP_ADDR`, `ADR2-TELNR_LONG` (`R3_USER` 1 = Telephone, 3 = Mobile) | `PARTNER`, `PARTY_LINES` |
-| Ship-to block | B26–B29 | same with `PARVW` = WE ≙ SH | `PARTNER`, `PARTY_LINES` |
+| Sold-to block | B20–B23 | `VBRK-KUNAG` + sales area → `KNVP` (`PARVW` = AG ≙ SP) → `KUNN2` → `KNA1-ADRNR` → `ADRC` `NAME1 STREET STR_SUPPL1 CITY1 CITY2 POST_CODE1 COUNTRY`, `ADR6-SMTP_ADDR`, `ADR2-TELNR_LONG` (`R3_USER` 1 = Telephone, 3 = Mobile) | `GET_PARTNER`, `PARTY_DATA` |
+| Ship-to block | B26–B29 | same with `PARVW` = WE ≙ SH | `GET_PARTNER`, `PARTY_DATA` |
 | Description of goods | B42 | `VBRP-MATNR` (+ `WERKS`) of INV → `MARC-STEUC` → `T604N-TEXT1` (SPRAS E, LAND1 IN); common HSN "clubbed" across all billing documents | `GOODS_LINES`; one line per distinct HSN, "<text> - HS CODE : 3917 2390". Excel col. AG overrides when filled (Q05) |
 | Payment term | B43 | `VBRK-ZTERM` → `TVZBT-VTEXT` (SPRAS E, first ZTAGG) | "PAYMENT TERM: …" |
 | Terms of shipment | B44 | `VBRK-INCO1`, `VBRK-INCO2` | "TERMS OF SHIPMENT :- EXW AHMEDABAD" (codes only, Q10) |
@@ -167,15 +167,15 @@ Each implemented assumption has an id (`Axx`) in the code. `docs/Development_Ass
 | Q11 | Technical deviations | Confirm the five corrections in §3 | As in §3 | — |
 | Q12 | Total Articles | B52 reads `ZSD_TART`, but the template has no column. Is calculating Σ Articles correct? | Calculated (A08) | — |
 | Q13 | Weight check level | FS: GW ≥ NW. Per package group, or per line? (Weights are given per merged group.) | Per weight group, at upload and at output (A07) | Rule granularity |
-| Q14 | Authorization | FS §2.3 is empty. Approve object `ZSD_EPACK` (ACTVT 01/04, BUKRS) + `V_VBRK_VKO`? | As stated (A24) | Roles |
+| Q14 | Authorization | FS §2.3 is empty. Is the standard check `V_VBRK_VKO` (print per sales org.) enough for now? | Yes, no custom object (A24) | Roles |
 | Q15 | When to write the log | Write `ZSD_EPACK_DATA` after **preview** as well, or only after print / PDF? | After any successful output, incl. preview. Never in "Validate only" (A39) | One condition |
 | Q16 | Log table | **Decided**: one table `ZSD_EPACK_DATA` as in the FS, invoices as one STRING (A40) | — | — |
 | Q17 | Re-upload | Uploading a PL that is already in the log replaces its rows. Is history needed? | Replace (A22) | Key / history |
 | Q18 | Package type | Sample 90000014 shows "Loose Pipes / Boxes" subtotals. Is the new optional column AL acceptable? | Yes (A09) | Template |
 | Q19 | Field lengths | Notify parties, containers and declaration texts in the samples exceed the FS lengths. Approve longer fields? | Yes (A19) | DDIC |
-| Q20 | Layout | Are the two sample PDFs the approved layout? Is crossing out with a graphic acceptable? | Yes (A26–A28) | Form |
+| Q20 | Layout | Are the two sample PDFs the approved layout of the one Adobe Form? | Yes (A26–A28) | Form |
 | Q21 | Release | SAP release / Excel API (`CL_FDT_XL_SPREADSHEET`) | S/4HANA ≥ 7.54 (A21, A29) | Parser |
-| Q22 | Billing types | Which billing types are export tax invoices (TVARVC `ZSD_EPACK_FKART`)? | Empty variable = all accepted (A11) | Customizing |
+| Q22 | Billing types | Should only certain billing types (export tax invoices) be accepted? | All accepted for now (A11) | One check |
 | Q23 | Missing master data | Missing GSTIN / CIN / IEC / description / HSN: warning (print with an empty field), or error? | Warning (A36) | Severity |
 
 ---
@@ -183,9 +183,9 @@ Each implemented assumption has an id (`Axx`) in the code. `docs/Development_Ass
 ## 5. Data flow
 
 ```
- ZSD_EPACK selection screen
+ ZSD_EPACK_PRINT selection screen (SE38 / SA38)
    Excel file (.xlsx)
-   format: automatic / with NP / without NP   output: preview / print / PDF folder
+   output: preview / print / PDF folder
    [ ] Validate only
           │
  1  FORM collect_packing_lists / parse_rows
@@ -198,29 +198,29 @@ Each implemented assumption has an id (`Axx`) in the code. `docs/Development_Ass
    cross-check: invoice in two PLs → error in both
           │
  2  FORM read_sap_data (bulk) + prepare_all / build_one
-   READ_SAP_DATA: union of all invoices → VBRK, VBRP, TVARVC, KNVP, KNA1, T001,
+   READ_SAP_DATA: union of all invoices → VBRK, VBRP, KNVP, KNA1, T001,
      T001Z, J_1BBRANCH, ADRC, ADR6, ADR2, T005T, T005U, VBAK, VBKD, TVZBT, MAKT,
      MARC, T604N — each ONCE (FOR ALL ENTRIES), into HASHED / SORTED tables
    per PL (BUILD_ONE, internal tables only):
-     invoices exist / not cancelled / billing type  → error
+     invoices exist / not cancelled                 → error
      invoices agree on header fields (Q04)          → error
-     authorization (BUKRS 04, V_VBRK_VKO 04)       → error
+     authorization (V_VBRK_VKO 04)                  → error
      GW ≥ NW (FS 2.1)                               → error, no form
      partners via KNVP (B20/B26)                    → error if missing
-     header + text blocks + items (B3 … B61)        → ts_result (status S/W/E)
+     IS_HEADER + IT_ITEM (B3 … B61)                 → ts_result (status S/W/E)
           │
  3  FORM output_forms
    LOOP over results (one per PL), skip status E
-     FORM send_form: SSF_FUNCTION_MODULE_NAME + form call with
-     IS_HEADER / IT_TEXT / IT_ITEM of THIS PL only → preview / spool / PDF file
+     FORM send_form: FP_FUNCTION_MODULE_NAME, FP_JOB_OPEN, form call with
+     IS_HEADER / IT_ITEM of THIS PL only, FP_JOB_CLOSE → preview / spool / PDF file
      error → logged on this PL, loop continues
           │
  4  FORM save_packing_lists / finish_db  (skipped in "Validate only")
    SAVE_PACKING_LISTS: PLs with output = X → ZSD_EPACK_DATA
      one row per line item; header fields repeated on every row;
      VBRK_VBELN = all invoices of the PL, comma-separated (STRING)
-     (authority 01, lock, array DELETE of the PL + INSERT, rollback on DB error)
-   FINISH: COMMIT WORK, release locks
+     (array DELETE of the PL + INSERT, rollback on DB error)
+   FINISH: COMMIT WORK
           │
    Result list (ALV): per PL status, form, invoices, items, output, saved, messages
 ```
@@ -230,8 +230,8 @@ keyed by the packing list number. Every entry carries only its own header,
 invoices, items and messages. The form is called with the data of one entry at a
 time. Billing items are collected per PL only from that PL's invoices.
 
-**Performance.** The Excel is parsed once, with no DB access. Data retrieval is **19 SELECTs per run**
-(14 in `READ_SAP_DATA`, 5 in `READ_ADDRESSES`), independent of the number of packing lists, invoices
+**Performance.** The Excel is parsed once, with no DB access. Data retrieval is **18 SELECTs per run**
+(13 in `READ_SAP_DATA`, 5 in `READ_ADDRESSES`), independent of the number of packing lists, invoices
 or items. Add one read of the default printer.
 There is no SELECT in a loop.
 Lookups use hashed / sorted keys. The writes are 1 DELETE and 1 INSERT on `ZSD_EPACK_DATA`, both
@@ -270,16 +270,15 @@ marked **(Qxx)** depend on the answer to that question.
 | T22 | Header data per Logic sheet | 1 PL against SE16 values | exporter = T001/ADRC; GST = J_1BBRANCH; CIN = T001Z ZCIN; IEC = ADRC-BUILDING; order no. = quotation VBKD-BSTKD/BSTDK; parties = KNVP→KNA1→ADRC/ADR6/ADR2; goods = VBRP→MARC→T604N clubbed; payment = TVZBT; Incoterms = INCO1 INCO2 | IT |
 | T23 | Item fallback to material master | G and K empty | description = MAKT, HSN = MARC-STEUC of the billing plant; warnings 048 / 044 if missing | IT |
 | T24 | Part not on any invoice | Part No. not billed | warning 030; HSN from upload only | IT |
-| T25 | Format selection | 0 NP / 1–5 NP / "without" forced with NP | without-NP form / with-NP form with unused windows crossed out / error 013 | IT |
-| T26 | Form missing / form error | deactivate one form | error 040 / 039 logged for that PL; the loop continues with the next PL | IT |
-| T27 | Preview cancelled | cancel in the preview dialog | warning 064, status W, not saved | IT |
+| T25 | Notify parties | 0 NP / 1–5 NP | one form `ZSD_EPACK_AF`: notify-party section hidden / shown with the filled parties only | IT |
+| T26 | Form missing / form error | deactivate `ZSD_EPACK_AF` | error 040 / 039 logged for that PL; the loop continues with the next PL | IT |
 | T28 | PDF per PL | PDF + folder, 2 PLs | `PackingList_90000014.pdf`, `PackingList_90000081.pdf` | IT |
 | T29 | Log table | after T03 | `ZSD_EPACK_DATA`: one row per line item of each PL; header fields on every row; `VBRK_VBELN` holds all invoices of the PL in one string ("A, B, C"); `ZSD_TART` = Σ Articles; message 032 | IT |
 | T30 | Re-upload | T03 file again | rows of both PLs replaced, no duplicates **(Q17)** | IT |
 | T31 | Validate only | any file | result list, no form, no DB change | IT |
-| T33 | Authorization | user without `ZSD_EPACK` 04 / `V_VBRK_VKO` / 01 | error 012, no form / form printed but not saved (warning 012) **(Q14)** | IT |
-| T34 | Volume | 20 PLs × 100 lines, 100 invoices | runtime dominated by form output; SQL trace shows 19 data SELECTs | IT (ST05) |
-| T36 | Business sample file | `test_data/Sample_data_ABAP.xlsx` | 1 PL (90000088), 3 invoices, 9 items, 3 packages; totals 120 / 884 / 1527.000 / 1423.000; with-NP form; 7 warnings 029 — see `test_data/Sample_data_ABAP_Expected_Results.md` | MT + IT |
+| T33 | Authorization | user without `V_VBRK_VKO` 04 for the sales org. | error 012, no form, nothing written **(Q14)** | IT |
+| T34 | Volume | 20 PLs × 100 lines, 100 invoices | runtime dominated by form output; SQL trace shows 18 data SELECTs | IT (ST05) |
+| T36 | Business sample file | `test_data/Sample_data_ABAP.xlsx` | 1 PL (90000088), 3 invoices, 9 items, 3 packages; totals 120 / 884 / 1527.000 / 1423.000; notify-party section shown; 7 warnings 029 — see `test_data/Sample_data_ABAP_Expected_Results.md` | MT + IT |
 | T37 | Placeholder text | "Fetch from logic" in H.S Code | HSN from material master | MT |
 | T35 | Regression | billing output, VF03, other `ZSD_*` objects | unchanged — no SAP object modified | IT |
 
@@ -289,16 +288,18 @@ marked **(Qxx)** depend on the answer to that question.
 
 | Object | Type | Status in this delivery |
 |---|---|---|
-| `ZSD_EPACK_PRINT` (T-code `ZSD_EPACK`) | Report | **Procedural**: Excel upload → one form per PL → log table |
+| `ZSD_EPACK_PRINT` | Report (SE38 / SA38, no transaction for now) | **Procedural**: Excel upload → one Adobe Form per PL → log table |
 | `ZSD_EPACK_PRINT_TOP` / `_SEL` / `_F01` / `_F02` | Includes | Types and data / selection screen / main FORMs / helper FORMs |
 | `ZCL_SD_EPACK_*`, `ZIF_SD_EPACK`, `ZCX_SD_EPACK` | Classes, interface | **Withdrawn**: replaced by the includes (same behaviour) |
 | `ZSD_EPACK_DATA` | Table | **The only Z table** (log): FS Technical-detail layout, `VBRK_VBELN` as STRING with all invoices of the PL |
 | `ZSD_EPACK_HDR`, `ZSD_EPACK_INV`, `ZSD_EPACK_LOG` | Tables | **Withdrawn** (one log table only) |
-| Form structures, lock object `EZSD_EPACK` | DDIC | Lock object now on `ZSD_EPACK_DATA` |
-| Message class `ZSD_EPACK` | Messages | 055–067 new, 004 / 006 / 011 / 042 reworded, upload-only messages withdrawn |
-| `ZSD_EPACK_UPLOAD` / T-code `ZSD_EPACK_UPL` | Report | **Withdrawn**, replaced by `ZSD_EPACK` |
-| `ZSD_EPACK_WITH_NP`, `ZSD_EPACK_WITHOUT_NP`, style, graphic | Smart Forms | Specification updated (one call per PL, Logic-sheet block content) |
+| `ZSD_S_EPACK_AF_HDR`, `ZSD_S_EPACK_AF_ITM`, `ZSD_TT_EPACK_AF_ITM`, `ZSD_EPACK_AF_IF` | DDIC, form interface | **New**: Adobe Form interface |
+| `ZSD_EPACK_AF` | Adobe Form | **New**: the only form (both FS formats) |
+| Message class `ZSD_EPACK` | Messages | 010 / 013 / 014 withdrawn, 040 reworded for the Adobe Form |
+| `ZSD_EPACK_UPLOAD` / T-code `ZSD_EPACK_UPL` | Report | **Withdrawn** |
+| Transaction `ZSD_EPACK`, lock object `EZSD_EPACK`, authorization object `ZSD_EPACK`, TVARVC `ZSD_EPACK_FKART` | Various | **Not created for now** |
+| `ZSD_EPACK_WITH_NP`, `ZSD_EPACK_WITHOUT_NP`, Smart Form structures, style, graphic | Smart Forms | **Withdrawn**: replaced by the Adobe Form |
 
-Full DDIC details: `src/DDIC_and_Repository_Objects.md`. Form build instructions:
-`docs/ZSD_EPACK_SmartForm_Specification.md`. Upload template:
+Full DDIC details: `src/DDIC_and_Repository_Objects.md`. Adobe Form interface and layout:
+`src/Adobe_Form_Interface_Structures.md`. Upload template:
 `templates/ZSD_EPACK_Upload_Template_v2.xlsx`.

@@ -3,7 +3,7 @@
 *&---------------------------------------------------------------------*
 *& WRICEF 102-B "Export consolidated packing list"
 *& Astral Limited / Project UDAY / SD
-*& Transaction code : ZSD_EPACK  (as named in the FS)
+*& Started with SE38 / SA38 (no transaction code for now)
 *&
 *& 1. Upload the packing list Excel file (FS template "Z table
 *&    Format1.xlsx" or the layout of Sample_data_ABAP.xlsx - columns are
@@ -11,8 +11,9 @@
 *& 2. For every packing list: read the header data of its invoices and
 *&    its line items exactly as described in the FS logic sheet
 *&    (Logic_sheet1.xlsx).
-*& 3. Output ONE Smart Form per packing list number (with / without
-*&    notify party). An error in one packing list never stops the others.
+*& 3. Output ONE Adobe Form (ZSD_EPACK_AF) per packing list number; the
+*&    notify-party section shows only when notify parties are maintained.
+*&    An error in one packing list never stops the others.
 *& 4. At the end, write the data of every packing list that was output
 *&    to the log table ZSD_EPACK_DATA (FS "Technical detail" layout: one
 *&    row per line item, all invoice numbers in one field VBRK_VBELN).
@@ -43,13 +44,9 @@ INCLUDE zsd_epack_print_f02.                " helper routines
 *&---------------------------------------------------------------------*
 *& Text elements
 *&   B01  Excel file
-*&   B02  Output format
-*&   B03  Output
+*&   B02  Output
 *& Selection texts
 *&   P_FILE   Excel file (.xlsx)
-*&   P_FAUTO  Automatic (notify party if maintained)
-*&   P_FWITH  With notify party
-*&   P_FWOUT  Without notify party
 *&   P_PREV   Print preview
 *&   P_PRINT  Print
 *&   P_PDF    Download PDF (one file per packing list)

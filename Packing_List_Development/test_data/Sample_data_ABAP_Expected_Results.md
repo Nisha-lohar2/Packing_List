@@ -1,4 +1,4 @@
-# Sample_data_ABAP.xlsx — expected results in `ZSD_EPACK`
+# Sample_data_ABAP.xlsx — expected results in `ZSD_EPACK_PRINT`
 
 Test file provided by the business on 12.10.2026: one sheet ("Sheet2"),
 headings in row 1, one packing list in rows 2–10.
@@ -19,7 +19,7 @@ headings in row 1, one packing list in rows 2–10.
 
 | Check | Expected |
 |---|---|
-| Packing lists / forms | **1** packing list (90000088), **1** form `ZSD_EPACK_WITH_NP` |
+| Packing lists / forms | **1** packing list (90000088), **1** Adobe Form `ZSD_EPACK_AF` output, notify-party section shown |
 | Invoices | 3 (1000000348, 1000000349, 1000000350) — must exist in SAP, not cancelled, same company code / business place / sold-to / sales area / payment terms / Incoterms |
 | Line items | 9 (Sl.No. 1–9) |
 | Packages | 3: "1 to 50" (50 articles, 657 / 623 kg), "51 to 90" (40, 540 / 510), "91 to 120" (30, 330 / 290) |

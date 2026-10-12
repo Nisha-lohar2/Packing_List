@@ -325,7 +325,7 @@ ENDFORM.
 *&---------------------------------------------------------------------*
 FORM build_print_items USING    it_items    TYPE ty_item_tab
                                 it_headings TYPE ty_hsn_heading_tab
-                       CHANGING ct_print    TYPE zsd_tt_epack_prt_itm.
+                       CHANGING ct_print    TYPE zsd_tt_epack_af_itm.
 
   DATA lv_prev_hsn  TYPE zsd_hsn VALUE '#'.
   DATA lv_prev_art  TYPE i.
@@ -334,10 +334,14 @@ FORM build_print_items USING    it_items    TYPE ty_item_tab
   DATA lv_run_sum   TYPE i.
   DATA lv_subtotals TYPE abap_bool.
   DATA ls_totals    TYPE ty_totals.
-  DATA ls_row       TYPE zsd_s_epack_prt_itm.
-  DATA ls_next      TYPE zsd_s_epack_prt_itm.
+  DATA ls_row       TYPE zsd_s_epack_af_itm.
+  DATA ls_next      TYPE zsd_s_epack_af_itm.
   DATA lv_next      TYPE i.
   DATA lv_text      TYPE string.
+  DATA lt_art_rows  TYPE HASHED TABLE OF ty_pkg_count WITH UNIQUE KEY grp.
+  DATA lt_wt_rows   TYPE HASHED TABLE OF ty_pkg_count WITH UNIQUE KEY grp.
+  DATA ls_count     TYPE ty_pkg_count.
+  DATA lv_grp       TYPE i.
 
   CLEAR ct_print.
 
@@ -353,8 +357,9 @@ FORM build_print_items USING    it_items    TYPE ty_item_tab
     IF lv_subtotals = abap_true AND sy-tabix > 1 AND ls_item-zsd_pkg_type <> lv_run_type.
       CLEAR ls_row.
       ls_row-row_type = gc_row_subtot.
-      ls_row-art_txt  = |{ lv_run_sum }|.
+      ls_row-articles = |{ lv_run_sum }|.
       ls_row-row_text = |<={ condense( CONV string( lv_run_type ) ) }|.
+      ls_row-pkg_type = lv_run_type.
       APPEND ls_row TO ct_print.
       CLEAR lv_run_sum.
     ENDIF.
@@ -370,33 +375,52 @@ FORM build_print_items USING    it_items    TYPE ty_item_tab
     ENDIF.
 
     CLEAR ls_row.
-    ls_row-row_type  = gc_row_item.
-    ls_row-sn_txt    = |{ CONV i( ls_item-zsd_sn ) }|.
+    ls_row-row_type   = gc_row_item.
+    ls_row-sl_no      = |{ CONV i( ls_item-zsd_sn ) }|.
     IF ls_item-zsd_inv_sn IS NOT INITIAL.
-      ls_row-inv_sn_txt = |{ CONV i( ls_item-zsd_inv_sn ) }|.
+      ls_row-inv_sn = |{ CONV i( ls_item-zsd_inv_sn ) }|.
     ENDIF.
-    ls_row-artno     = ls_item-zsd_artno.
-    ls_row-std_txt   = |{ CONV i( ls_item-zsd_std ) }|.
-    ls_row-partno    = ls_item-zsd_partno.
-    ls_row-matdesc   = ls_item-zsd_matdesc.
+    ls_row-article_no = ls_item-zsd_artno.
+    ls_row-std        = |{ CONV i( ls_item-zsd_std ) }|.
+    ls_row-part_no    = ls_item-zsd_partno.
+    ls_row-prod_desc  = ls_item-zsd_matdesc.
     PERFORM format_quantity USING ls_item-zsd_qty CHANGING lv_text.
-    ls_row-qty_txt   = lv_text.
-    ls_row-hsn       = ls_item-zsd_hsn.
-    ls_row-art_first = xsdbool( ls_item-zsd_art_grp <> lv_prev_art ).
-    ls_row-wt_first  = xsdbool( ls_item-zsd_wt_grp  <> lv_prev_wt ).
-    ls_row-art_grp   = ls_item-zsd_art_grp.
-    ls_row-wt_grp    = ls_item-zsd_wt_grp.
-    " "Merged" cells: values on the first line of a group only
+    ls_row-quantity   = lv_text.
+    ls_row-hsn        = ls_item-zsd_hsn.
+    ls_row-pkg_type   = ls_item-zsd_pkg_type.
+    ls_row-art_grp    = ls_item-zsd_art_grp.
+    ls_row-wt_grp     = ls_item-zsd_wt_grp.
+    ls_row-art_first  = xsdbool( ls_item-zsd_art_grp <> lv_prev_art ).
+    ls_row-wt_first   = xsdbool( ls_item-zsd_wt_grp  <> lv_prev_wt ).
+    " "Merged" cells: values on the first row of a group only
     IF ls_row-art_first = abap_true.
-      ls_row-art_txt = |{ CONV i( ls_item-zsd_art ) }|.
+      ls_row-articles = |{ CONV i( ls_item-zsd_art ) }|.
     ENDIF.
     IF ls_row-wt_first = abap_true.
       PERFORM format_weight USING ls_item-zsd_gwt CHANGING lv_text.
-      ls_row-gwt_txt = lv_text.
+      ls_row-gross_wt = lv_text.
       PERFORM format_weight USING ls_item-zsd_nwt CHANGING lv_text.
-      ls_row-nwt_txt = lv_text.
+      ls_row-net_wt = lv_text.
     ENDIF.
     APPEND ls_row TO ct_print.
+
+    " Rows per group (ART_ROWS / WT_ROWS)
+    ls_count-grp = ls_item-zsd_art_grp.
+    READ TABLE lt_art_rows ASSIGNING FIELD-SYMBOL(<ls_art>) WITH TABLE KEY grp = ls_count-grp.
+    IF sy-subrc = 0.
+      <ls_art>-rows = <ls_art>-rows + 1.
+    ELSE.
+      ls_count-rows = 1.
+      INSERT ls_count INTO TABLE lt_art_rows.
+    ENDIF.
+    ls_count-grp = ls_item-zsd_wt_grp.
+    READ TABLE lt_wt_rows ASSIGNING FIELD-SYMBOL(<ls_wt>) WITH TABLE KEY grp = ls_count-grp.
+    IF sy-subrc = 0.
+      <ls_wt>-rows = <ls_wt>-rows + 1.
+    ELSE.
+      ls_count-rows = 1.
+      INSERT ls_count INTO TABLE lt_wt_rows.
+    ENDIF.
 
     lv_prev_art = ls_item-zsd_art_grp.
     lv_prev_wt  = ls_item-zsd_wt_grp.
@@ -408,18 +432,26 @@ FORM build_print_items USING    it_items    TYPE ty_item_tab
   IF lv_subtotals = abap_true AND lt_items IS NOT INITIAL.
     CLEAR ls_row.
     ls_row-row_type = gc_row_subtot.
-    ls_row-art_txt  = |{ lv_run_sum }|.
+    ls_row-articles = |{ lv_run_sum }|.
     ls_row-row_text = |<={ condense( CONV string( lv_run_type ) ) }|.
+    ls_row-pkg_type = lv_run_type.
     APPEND ls_row TO ct_print.
   ENDIF.
 
-  " Last line of each group - the form draws the bottom border there
+  " Last row of each group (the form draws the bottom border there) and
+  " the number of rows of the group
   LOOP AT ct_print ASSIGNING FIELD-SYMBOL(<ls_row>) WHERE row_type = gc_row_item.
     lv_next = sy-tabix + 1.
     CLEAR ls_next.
     READ TABLE ct_print INTO ls_next INDEX lv_next.
     <ls_row>-art_last = xsdbool( ls_next-row_type <> gc_row_item OR ls_next-art_grp <> <ls_row>-art_grp ).
     <ls_row>-wt_last  = xsdbool( ls_next-row_type <> gc_row_item OR ls_next-wt_grp  <> <ls_row>-wt_grp ).
+    lv_grp = <ls_row>-art_grp.
+    READ TABLE lt_art_rows INTO ls_count WITH TABLE KEY grp = lv_grp.
+    <ls_row>-art_rows = COND #( WHEN sy-subrc = 0 THEN ls_count-rows ELSE 1 ).
+    lv_grp = <ls_row>-wt_grp.
+    READ TABLE lt_wt_rows INTO ls_count WITH TABLE KEY grp = lv_grp.
+    <ls_row>-wt_rows = COND #( WHEN sy-subrc = 0 THEN ls_count-rows ELSE 1 ).
   ENDLOOP.
 
 ENDFORM.
@@ -691,31 +723,34 @@ FORM join_parts USING    it_parts TYPE ty_text_tab
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Text block lines -> form text table (lines split at 255 characters)
+*& Multi-line text -> one STRING with line breaks (Adobe text field)
 *&---------------------------------------------------------------------*
-FORM append_block USING    iv_block TYPE csequence
-                           it_lines TYPE ty_text_tab
-                  CHANGING ct_texts TYPE zsd_tt_epack_prt_txt.
+FORM text_block USING    iv_text TYPE csequence
+                CHANGING cv_text TYPE string.
 
-  DATA lv_line_no TYPE zsd_s_epack_prt_txt-line_no.
-  DATA lv_rest    TYPE string.
-  DATA lv_block   TYPE zsd_epack_block.
-  CONSTANTS lc_len TYPE i VALUE 255.
+  DATA lt_lines TYPE ty_text_tab.
 
-  lv_block = iv_block.
+  PERFORM split_lines USING iv_text CHANGING lt_lines.
+  cv_text = concat_lines_of( table = lt_lines sep = cl_abap_char_utilities=>newline ).
 
-  LOOP AT it_lines INTO DATA(lv_line).
-    lv_rest = lv_line.
-    WHILE lv_rest IS NOT INITIAL.
-      lv_line_no = lv_line_no + 1.
-      IF strlen( lv_rest ) > lc_len.
-        APPEND VALUE #( block = lv_block line_no = lv_line_no text = lv_rest(lc_len) ) TO ct_texts.
-        lv_rest = lv_rest+lc_len.
-      ELSE.
-        APPEND VALUE #( block = lv_block line_no = lv_line_no text = lv_rest ) TO ct_texts.
-        CLEAR lv_rest.
-      ENDIF.
-    ENDWHILE.
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& "No. of Pkgs." when not uploaded: "2342 Loose Pipes" / "1073 Boxes" /
+*& "3415 Pkgs." from the package-type subtotals
+*&---------------------------------------------------------------------*
+FORM packages_text USING    is_totals TYPE ty_totals
+                   CHANGING cv_text   TYPE string.
+
+  DATA lt_lines TYPE ty_text_tab.
+  DATA lv_type  TYPE string.
+
+  LOOP AT is_totals-pkg_types INTO DATA(ls_type) WHERE pkg_type IS NOT INITIAL.
+    lv_type = condense( CONV string( ls_type-pkg_type ) ).
+    APPEND |{ ls_type-articles } { lv_type }| TO lt_lines.
   ENDLOOP.
+  APPEND |{ is_totals-articles } Pkgs.| TO lt_lines.
+
+  cv_text = concat_lines_of( table = lt_lines sep = cl_abap_char_utilities=>newline ).
 
 ENDFORM.

@@ -18,36 +18,30 @@ CONSTANTS:
   gc_hsn_country TYPE land1      VALUE 'IN',
   " T001Z parameter type holding the CIN - logic sheet B7
   gc_cin_party   TYPE party      VALUE 'ZCIN',
-  " TVARVC select-option: export tax-invoice billing types (A11)
-  gc_tvarv_fkart TYPE rvari_vnam VALUE 'ZSD_EPACK_FKART',
-  " Custom authorization object (ACTVT, BUKRS) - A24
-  gc_auth_object TYPE xuobject   VALUE 'ZSD_EPACK',
   " Partner functions - INTERNAL codes of SP / SH (logic B20 / B26)
   gc_parvw_sold  TYPE parvw      VALUE 'AG',
   gc_parvw_ship  TYPE parvw      VALUE 'WE',
-  gc_actvt_save  TYPE activ_auth VALUE '01',
+  " Display / print authorization for billing documents (V_VBRK_VKO)
   gc_actvt_print TYPE activ_auth VALUE '04',
   gc_uom_qty     TYPE meins      VALUE 'ST',
   gc_uom_weight  TYPE gewei      VALUE 'KG',
-  " Smart Forms - FS: with / without notifier party
-  gc_form_with   TYPE tdsfname   VALUE 'ZSD_EPACK_WITH_NP',
-  gc_form_wout   TYPE tdsfname   VALUE 'ZSD_EPACK_WITHOUT_NP',
-  " Format choice
-  gc_fmt_auto    TYPE char1      VALUE 'A',
-  gc_fmt_with    TYPE char1      VALUE 'W',
-  gc_fmt_wout    TYPE char1      VALUE 'O',
+  " Adobe Form (SFP) - one form; the notify-party section is shown only
+  " when notify parties are maintained (IS_HEADER-FORMAT / NP_COUNT)
+  gc_form_name   TYPE fpname     VALUE 'ZSD_EPACK_AF',
+  gc_fmt_with_np TYPE char1      VALUE 'N',
+  gc_fmt_wout_np TYPE char1      VALUE 'O',
   " Output channel
   gc_out_preview TYPE char1      VALUE 'V',
   gc_out_print   TYPE char1      VALUE 'P',
   gc_out_pdf     TYPE char1      VALUE 'F',
   " Processing status per packing list (result list)
-  gc_st_success  TYPE zsd_epack_status VALUE 'S',
-  gc_st_warning  TYPE zsd_epack_status VALUE 'W',
-  gc_st_error    TYPE zsd_epack_status VALUE 'E',
+  gc_st_success  TYPE char1      VALUE 'S',
+  gc_st_warning  TYPE char1      VALUE 'W',
+  gc_st_error    TYPE char1      VALUE 'E',
   " Printed row types
-  gc_row_heading TYPE zsd_epack_row_type VALUE 'H',
-  gc_row_item    TYPE zsd_epack_row_type VALUE 'I',
-  gc_row_subtot  TYPE zsd_epack_row_type VALUE 'S',
+  gc_row_heading TYPE char1      VALUE 'H',
+  gc_row_item    TYPE char1      VALUE 'I',
+  gc_row_subtot  TYPE char1      VALUE 'S',
   " Notify parties - FS: "up to five"
   gc_max_np      TYPE i          VALUE 5.
 
@@ -126,19 +120,18 @@ TYPES:
   ty_packing_list_tab TYPE SORTED TABLE OF ty_packing_list WITH UNIQUE KEY packno.
 
 TYPES:
-  " Everything handed to the Smart Form
+  " Everything handed to the Adobe Form (interface ZSD_EPACK_AF_IF)
   BEGIN OF ty_print_data,
-    form   TYPE tdsfname,
-    header TYPE zsd_s_epack_prt_hdr,
-    texts  TYPE zsd_tt_epack_prt_txt,
-    items  TYPE zsd_tt_epack_prt_itm,
+    form   TYPE fpname,
+    header TYPE zsd_s_epack_af_hdr,
+    items  TYPE zsd_tt_epack_af_itm,
   END OF ty_print_data,
 
   " Processing result of one packing list (one form, one log row)
   BEGIN OF ty_result,
     packno     TYPE zsd_packno,
     bukrs      TYPE bukrs,
-    status     TYPE zsd_epack_status,
+    status     TYPE char1,
     print      TYPE ty_print_data,
     messages   TYPE bapiret2_t,
     inv_count  TYPE i,
@@ -178,6 +171,12 @@ TYPES:
   END OF ty_pkg_total,
   ty_pkg_total_tab TYPE STANDARD TABLE OF ty_pkg_total WITH EMPTY KEY,
 
+  " Number of printed rows of an article / weight group
+  BEGIN OF ty_pkg_count,
+    grp  TYPE i,
+    rows TYPE i,
+  END OF ty_pkg_count,
+
   BEGIN OF ty_totals,
     articles  TYPE i,
     quantity  TYPE zsd_qty,
@@ -209,7 +208,7 @@ TYPES:
   END OF ty_pl_rows,
   ty_pl_rows_tab TYPE STANDARD TABLE OF ty_pl_rows WITH EMPTY KEY,
 
-  " Header column -> field of ZSD_EPACK_HDR, found by heading
+  " Header column -> header field (ty_header), found by heading
   BEGIN OF ty_map,
     col    TYPE i,                 " 0 = not in the file
     regex  TYPE string,            " on the normalized heading
@@ -401,7 +400,16 @@ TYPES:
   BEGIN OF ty_partner,
     kunnr TYPE kunnr,
     adrnr TYPE adrnr,
-  END OF ty_partner.
+  END OF ty_partner,
+
+  " Printed address block of a partner (logic B20-B23 / B26-B29)
+  BEGIN OF ty_party_data,
+    name    TYPE string,
+    address TYPE string,           " lines separated by newline
+    tel     TYPE string,
+    mobile  TYPE string,
+    email   TYPE string,
+  END OF ty_party_data.
 
 *----------------------------------------------------------------------*
 * Global data
@@ -410,7 +418,6 @@ TYPES:
 DATA gt_packing_lists TYPE ty_packing_list_tab.
 DATA gt_file_messages TYPE bapiret2_t.
 DATA gt_result        TYPE ty_result_tab.
-DATA gt_locked        TYPE SORTED TABLE OF zsd_packno WITH UNIQUE KEY table_line.
 DATA gv_default_dest  TYPE rspopname.
 
 " Excel column map of the uploaded file
@@ -438,4 +445,3 @@ DATA gt_marc   TYPE ty_marc_tab.
 DATA gt_t604n  TYPE ty_t604n_tab.
 DATA gt_matnr  TYPE ty_partno_matnr_tab.
 DATA gt_auth   TYPE ty_auth_tab.
-DATA gr_fkart  TYPE RANGE OF fkart.
