@@ -11,9 +11,9 @@ The requirement analysis with all 43 original clarifications is in
 | Deliverable | File | Status |
 |---|---|---|
 | Report (T-code `ZSD_EPACK`) | `src/ZSD_EPACK_PRINT.prog.abap` | Code complete |
-| Excel parser + 20 unit tests | `src/ZCL_SD_EPACK_UPLOAD.clas.abap`, `.testclasses.abap` | Code complete |
+| Excel parser + 22 unit tests | `src/ZCL_SD_EPACK_UPLOAD.clas.abap`, `.testclasses.abap` | Code complete |
 | Data retrieval per Logic sheet (bulk) | `src/ZCL_SD_EPACK_DATA.clas.abap` | Code complete |
-| Business rules + 26 unit tests | `src/ZCL_SD_EPACK_RULES.clas.abap`, `.testclasses.abap` | Code complete (unchanged) |
+| Business rules + 28 unit tests | `src/ZCL_SD_EPACK_RULES.clas.abap`, `.testclasses.abap` | Code complete |
 | Form output + result list | `src/ZCL_SD_EPACK_OUTPUT.clas.abap` | Code complete |
 | Save to Z tables + log | `src/ZCL_SD_EPACK_STORE.clas.abap` | Code complete |
 | Types / exception | `src/ZIF_SD_EPACK.intf.abap`, `src/ZCX_SD_EPACK.clas.abap` | Code complete |
@@ -34,7 +34,7 @@ example sheet: 77 lines, totals 4074 / 12146 / 116323.800 / 115386.780, matching
 | A01 | An invoice may belong to only one packing list in a file. If it appears under two, both packing lists get an error. | FS silent | Q02 |
 | A04 | All invoices of one packing list must agree on company code, business place, sold-to, sales area, payment terms and Incoterms. Otherwise the packing list is rejected. No "first invoice" is chosen. | Logic sheet reads one VBRK; the user asked not to pick an arbitrary invoice | Q04 |
 | A05 | The format is chosen automatically: "with notify party" when any notify party is uploaded. A manual choice of "without" while notify parties exist is an error. | FS 1.1 (labels a/b contradict) | — |
-| A06 | Merged Excel cells mean package groups: an empty Articles cell, or empty Gross + Net cells, belong to the group above. | Template merged ranges, samples | Q13 |
+| A06 | Package groups: merged Excel cells (an empty Articles / Gross + Net cell belongs to the group above) **or** values repeated on each row with the same Article No. (business sample file) count as one package. | Template merged ranges, samples, `Sample_data_ABAP.xlsx` | Q13 |
 | A07 | GW ≥ NW is checked per weight group, at upload and again before output. An error means no form for that packing list. | FS 2.1 | Q13 |
 | A08 | Total Articles is calculated (Σ Articles). Quantity ≠ STD × Articles gives a warning only. | Template has no `ZSD_TART` column | Q12 |
 | A09 | Optional column AL "Package Type" drives the subtotal rows and the total text. | Sample 90000014 | Q18 |
@@ -57,6 +57,7 @@ example sheet: 77 lines, totals 4074 / 12146 / 116323.800 / 115386.780, matching
 | A36 | Missing GSTIN / CIN / IEC / description / HSN gives a warning and an empty field. | FS silent | Q23 |
 | A38 | An exact duplicate row is ignored with a warning. The same Sl.No. with different values is an error. | User request "avoid duplicates" | Q03 |
 | A39 | Data is saved after a successful output, including preview. Nothing is saved or logged in "Validate only". | "at last add the data in Z table" | Q15 |
+| A41 | Upload columns are recognised by heading text, so column order is free. Cell text "Fetch from …" means no value: the value is derived in SAP. | `Sample_data_ABAP.xlsx` | — |
 | A40 | Uploaded data → `ZSD_EPACK_HDR / INV / DATA` (FS table). Run log → new `ZSD_EPACK_LOG`, one row per packing list. | "Z table that was created for log" is ambiguous | Q16 |
 
 ### Confirmed by the repository (no longer assumptions)

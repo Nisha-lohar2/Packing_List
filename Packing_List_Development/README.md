@@ -17,12 +17,14 @@ annexures stay in the repository root, unchanged:
 | `src/ZSD_EPACK_PRINT.prog.abap` | Report behind transaction `ZSD_EPACK` |
 | `src/ZIF_SD_EPACK.intf.abap` | Types and constants |
 | `src/ZCX_SD_EPACK.clas.abap` | Exception class |
-| `src/ZCL_SD_EPACK_UPLOAD.clas.abap` (+ `.testclasses.abap`) | Excel parser, split by packing list number — 20 unit tests |
-| `src/ZCL_SD_EPACK_RULES.clas.abap` (+ `.testclasses.abap`) | Package groups, FS weight check, totals, formatting — 26 unit tests |
+| `src/ZCL_SD_EPACK_UPLOAD.clas.abap` (+ `.testclasses.abap`) | Excel parser, split by packing list number, columns found by heading — 22 unit tests |
+| `src/ZCL_SD_EPACK_RULES.clas.abap` (+ `.testclasses.abap`) | Package groups, FS weight check, totals, formatting — 28 unit tests |
 | `src/ZCL_SD_EPACK_DATA.clas.abap` | Data retrieval per the Logic sheet, bulk reads, checks |
 | `src/ZCL_SD_EPACK_OUTPUT.clas.abap` | Smart Form call, PDF, result list |
 | `src/ZCL_SD_EPACK_STORE.clas.abap` | Save to Z tables, log |
 | `templates/ZSD_EPACK_Upload_Template_v2.xlsx` | Upload template with instructions and a worked example (sample 90000081) |
+| `test_data/Sample_data_ABAP.xlsx` | Business sample upload file (packing list 90000088) |
+| `test_data/Sample_data_ABAP_Expected_Results.md` | Expected result of that file, and data points to check |
 
 ## Build order in SAP
 

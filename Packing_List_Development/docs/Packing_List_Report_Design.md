@@ -26,6 +26,12 @@ No other ABAP, CDS, form or table definition exists in the repository. Nothing f
 
 ### 1.1 Upload file (`Z table Format1.xlsx`, sheet "Format")
 
+> **Columns are found by their heading**, not by position. The FS template order
+> below and the order of the business sample `test_data/Sample_data_ABAP.xlsx`
+> (packing list A, invoice B, items C–M — the "Technical detail" order) are
+> both supported. Cells reading "Fetch from …" are treated as empty (A41).
+> Package values may be merged cells **or** repeated on every row of the package (A06).
+
 | Columns | Content | Level |
 |---|---|---|
 | A | Sl.No. | line item |
@@ -233,8 +239,8 @@ array operations. AUTHORITY-CHECK results are buffered per value.
 
 ## 6. Test plan
 
-`UT` = automated ABAP Unit (`ZCL_SD_EPACK_UPLOAD` 20 tests, `ZCL_SD_EPACK_RULES`
-26 tests). `IT` = integration test in QAS with real invoices. Expected results
+`UT` = automated ABAP Unit (`ZCL_SD_EPACK_UPLOAD` 22 tests, `ZCL_SD_EPACK_RULES`
+28 tests). `IT` = integration test in QAS with real invoices. Expected results
 marked **(Qxx)** depend on the answer to that question.
 
 | # | Scenario | Test data | Expected result | Type |
@@ -273,6 +279,8 @@ marked **(Qxx)** depend on the answer to that question.
 | T32 | Reprint saved | option "Saved packing lists" by invoice | PL found through its invoice, printed with all its invoices (info 006), print stamp set for print / PDF | IT |
 | T33 | Authorization | user without `ZSD_EPACK` 04 / `V_VBRK_VKO` / 01 | error 012, no form / form printed but not saved (warning 012) **(Q14)** | IT |
 | T34 | Volume | 20 PLs × 100 lines, 100 invoices | runtime dominated by form output; SQL trace shows 19 data SELECTs | IT (ST05) |
+| T36 | Business sample file | `test_data/Sample_data_ABAP.xlsx` | 1 PL (90000088), 3 invoices, 9 items, 3 packages; totals 120 / 884 / 1527.000 / 1423.000; with-NP form; 7 warnings 029 — see `test_data/Sample_data_ABAP_Expected_Results.md` | UT `sample_file_layout_is_read`, `repeated_values_one_package` + IT |
+| T37 | Placeholder text | "Fetch from logic" in H.S Code | HSN from material master | UT `placeholder_text_is_empty` |
 | T35 | Regression | billing output, VF03, other `ZSD_*` objects | unchanged — no SAP object modified | IT |
 
 ---
@@ -282,7 +290,7 @@ marked **(Qxx)** depend on the answer to that question.
 | Object | Type | Status in this delivery |
 |---|---|---|
 | `ZSD_EPACK_PRINT` (T-code `ZSD_EPACK`) | Report | **Reworked**: Excel upload → one form per PL → save + log |
-| `ZCL_SD_EPACK_UPLOAD` + test class | Class | **Reworked**: parser with no DB access, several PLs per file, 20 unit tests |
+| `ZCL_SD_EPACK_UPLOAD` + test class | Class | **Reworked**: parser with no DB access, several PLs per file, columns found by heading, 22 unit tests |
 | `ZCL_SD_EPACK_DATA` | Class | **Reworked**: bulk reads for all PLs, Logic-sheet derivations (KNVP partners, Incoterm codes, strict B11/B42) |
 | `ZCL_SD_EPACK_STORE` | Class | **New**: save to Z tables, log table |
 | `ZCL_SD_EPACK_OUTPUT` | Class | Extended: result list, output result for preview |

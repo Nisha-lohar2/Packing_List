@@ -42,6 +42,8 @@ CLASS ltc_parser DEFINITION FINAL
     METHODS total_row_is_not_an_item     FOR TESTING.
     METHODS weight_error_found_in_upload FOR TESTING.
     METHODS empty_file_rejected          FOR TESTING.
+    METHODS sample_file_layout_is_read   FOR TESTING.
+    METHODS placeholder_text_is_empty    FOR TESTING.
 
     METHODS heading
       RETURNING VALUE(rs_row) TYPE zcl_sd_epack_upload=>ty_row.
@@ -82,11 +84,20 @@ CLASS ltc_parser IMPLEMENTATION.
 
 
   METHOD heading.
+    " Headings of the FS template "Z table Format1.xlsx" (+ AL)
     rs_row-row   = 1.
-    rs_row-cells = VALUE #( FOR i = 1 UNTIL i > 38 ( `` ) ).
-    rs_row-cells[ 1 ]  = `Sl.No.`.
-    rs_row-cells[ 12 ] = `SAP Invoice Number`.
-    rs_row-cells[ 13 ] = `Packing list no`.
+    rs_row-cells = VALUE #(
+      ( `Sl.No.` ) ( `Sr.No. INV` ) ( `Article No.` ) ( `STD` ) ( `Articles` ) ( `Part No.` )
+      ( `Product Description ( Fetch from material master)` ) ( `Quantity      Pcs` )
+      ( `Gross Wt. KGS` ) ( `Net Wt. KGS` ) ( `H.S Code` ) ( `SAP Invoice Number` )
+      ( `Packing list no` ) ( `Packing list date` ) ( `Exporter ReF` )
+      ( `Buyer's Reference No. & Date:` ) ( `Buyer's Reference date` ) ( `Country of origin of goods` )
+      ( `Notifier Party1` ) ( `Notifier Party2` ) ( `Notifier Party3` ) ( `Notifier Party4` )
+      ( `Notifier Party5` ) ( `Pre-Carriage` ) ( `Place of Receipt by Pre-carrier` )
+      ( `Port of Loading` ) ( `Port of Discharge` ) ( `Place of Delivery` ) ( `Marks & Nos.` )
+      ( `Vessel / Flight No.` ) ( `Container No` ) ( `No. of Packages` ) ( `Description of goods` )
+      ( `Declaration of Packing list` ) ( `Advance amount received` )
+      ( `Commercial terms of invoice` ) ( `Declaration of Invoice` ) ( `Package Type` ) ).
   ENDMETHOD.
 
 
@@ -436,6 +447,70 @@ CLASS ltc_parser IMPLEMENTATION.
 
     cl_abap_unit_assert=>assert_initial( lt_pl ).
     cl_abap_unit_assert=>assert_true( has_msg( it_messages = lt_msg iv_no = '036' ) ).
+
+  ENDMETHOD.
+
+  METHOD sample_file_layout_is_read.
+
+    " Column order and content of Sample_data_ABAP.xlsx: packing list in A,
+    " invoices in B, items in C-M; package values repeated on every row
+    DATA(ls_head) = VALUE zcl_sd_epack_upload=>ty_row(
+      row   = 1
+      cells = VALUE #( ( `Paclking list Number` ) ( `SAP Invoice Number` ) ( `Sl.No.` ) ( `Sr.No. INV` )
+                       ( `Article No.` ) ( `STD` ) ( `Articles` ) ( `Part No.` )
+                       ( `Product Description ( Fetch from material master)` ) ( `Quantity      Pcs` )
+                       ( `Gross Wt. KGS` ) ( `Net Wt. KGS` ) ( `H.S Code` ) ( `Packing list date` )
+                       ( `Exporter ReF` ) ) ).
+
+    DATA(lt_rows) = VALUE zcl_sd_epack_upload=>tt_rows(
+      ( ls_head )
+      ( row = 2 cells = VALUE #( ( `90000088` ) ( `1000000348, 1000000349, 1000000350` ) ( `1` ) ( `20` )
+                                 ( `1 to 50` ) ( `1` ) ( `50` ) ( `F-1A` ) ( `Finished Good - 001` ) ( `106` )
+                                 ( `657` ) ( `623` ) ( `Fetch from logic ` ) ( `46275` ) ( `fetch from logic` ) ) )
+      ( row = 3 cells = VALUE #( ( `90000088` ) ( `` ) ( `2` ) ( `30` )
+                                 ( `1 to 50` ) ( `1` ) ( `50` ) ( `F-8A` ) ( `F-8A` ) ( `105` )
+                                 ( `657` ) ( `623` ) ) )
+      ( row = 4 cells = VALUE #( ( `90000088` ) ( `` ) ( `3` ) ( `40` )
+                                 ( `1 to 50` ) ( `1` ) ( `50` ) ( `FG00000000001` ) ( `IC DIA600` ) ( `90` )
+                                 ( `657` ) ( `623` ) ) )
+      ( row = 5 cells = VALUE #( ( `90000088` ) ( `` ) ( `4` ) ( `50` )
+                                 ( `51 to 90` ) ( `2` ) ( `40` ) ( `FG00000000002` ) ( `Test Material 123` ) ( `101` )
+                                 ( `540` ) ( `510` ) ) ) ).
+
+    parse( EXPORTING it_rows     = lt_rows
+           IMPORTING et_pl       = DATA(lt_pl)
+                     et_messages = DATA(lt_msg) ).
+
+    cl_abap_unit_assert=>assert_initial( lt_msg ).
+    DATA(ls_pl) = lt_pl[ packno = '0090000088' ].
+    cl_abap_unit_assert=>assert_equals( act = lines( ls_pl-invoices ) exp = 3 ).
+    cl_abap_unit_assert=>assert_equals( act = lines( ls_pl-items )    exp = 4 ).
+    cl_abap_unit_assert=>assert_equals( act = ls_pl-header-zsd_packdt exp = '20260910' ).
+    cl_abap_unit_assert=>assert_false( zcl_sd_epack_rules=>has_errors( ls_pl-messages ) ).
+
+    " Repeated package values counted once: 50 + 40 articles, 657 + 540 kg
+    DATA(ls_totals) = zcl_sd_epack_rules=>calc_totals( ls_pl-items ).
+    cl_abap_unit_assert=>assert_equals( act = ls_totals-articles exp = 90 ).
+    cl_abap_unit_assert=>assert_equals( act = ls_totals-gross    exp = '1197.000' ).
+    cl_abap_unit_assert=>assert_equals( act = ls_totals-net      exp = '1133.000' ).
+    cl_abap_unit_assert=>assert_equals( act = ls_pl-items[ 3 ]-zsd_wt_grp exp = ls_pl-items[ 1 ]-zsd_wt_grp ).
+
+  ENDMETHOD.
+
+
+  METHOD placeholder_text_is_empty.
+
+    DATA(ls_row) = line( iv_row = 2 iv_sn = `1` iv_inv = `90000101`
+                         iv_packno = `90000014` iv_packdt = `27.05.2025` ).
+    ls_row-cells[ 7 ]  = `Fetch from material master`.
+    ls_row-cells[ 11 ] = `Fetch from logic `.
+
+    parse( EXPORTING it_rows = VALUE #( ( heading( ) ) ( ls_row ) )
+           IMPORTING et_pl   = DATA(lt_pl) ).
+
+    DATA(ls_item) = lt_pl[ packno = gc_pl_a ]-items[ 1 ].
+    cl_abap_unit_assert=>assert_initial( ls_item-zsd_hsn ).
+    cl_abap_unit_assert=>assert_initial( ls_item-zsd_matdesc ).
 
   ENDMETHOD.
 

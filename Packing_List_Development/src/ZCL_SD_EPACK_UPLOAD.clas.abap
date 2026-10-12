@@ -6,15 +6,16 @@
 "! and splits it into PACKING LISTS. No database access - all SAP checks
 "! are done in bulk by ZCL_SD_EPACK_DATA afterwards.
 "!
-"! FILE LAYOUT (columns as in the FS template, A = 1)
-"!   row 1       column headings (checked loosely)
-"!   A-K         line item: Sl.No., Sr.No. INV, Article No., STD, Articles,
-"!               Part No., Product Description, Quantity, Gross/Net Wt., H.S Code
-"!   L           SAP Invoice Number - one per row and/or several per cell
-"!   M           Packing list no
-"!   N-AK        header data of the packing list (logic sheet "Pass
-"!               ZSD_PACKNO get ...")
-"!   AL          optional Package Type (not in the FS template, see A09)
+"! FILE LAYOUT - columns are found by their HEADING in row 1, so the order
+"! does not matter (FS template "Format": items A-K, invoice L, packing
+"! list M; Sample_data_ABAP.xlsx: packing list A, invoice B, items C-M):
+"!   items       Sl.No., Sr.No. INV, Article No., STD, Articles, Part No.,
+"!               Product Description, Quantity, Gross/Net Wt., H.S Code
+"!   SAP Invoice Number - one per row and/or several per cell
+"!   Packing list no / Number
+"!   header data of the packing list (logic sheet "Pass ZSD_PACKNO get ...")
+"!   optional "Package Type" (not in the FS template, see A09)
+"!   Cells reading "Fetch from ..." are treated as empty (A41).
 "!
 "! SEVERAL PACKING LISTS PER FILE (ASSUMPTION A33)
 "!   A row with "Packing list no" filled starts / continues that packing
@@ -71,7 +72,10 @@ CLASS zcl_sd_epack_upload DEFINITION
     "! Header column -> field of ZSD_EPACK_HDR
     TYPES:
       BEGIN OF ty_map,
+        "! Column found for the heading (0 = not in the file)
         col    TYPE i,
+        "! Regex on the normalized heading (upper case, letters/digits only)
+        regex  TYPE string,
         field  TYPE fieldname,
         "! C char / T multi-line text / D date / A amount
         kind   TYPE char1,
@@ -88,24 +92,32 @@ CLASS zcl_sd_epack_upload DEFINITION
       END OF ty_pl_rows,
       tt_pl_rows TYPE STANDARD TABLE OF ty_pl_rows WITH EMPTY KEY.
 
-    "! Column numbers of the FS template (A = 1)
-    CONSTANTS:
-      BEGIN OF gc_col,
-        sn       TYPE i VALUE 1,
-        inv_sn   TYPE i VALUE 2,
-        artno    TYPE i VALUE 3,
-        std      TYPE i VALUE 4,
-        art      TYPE i VALUE 5,
-        partno   TYPE i VALUE 6,
-        matdesc  TYPE i VALUE 7,
-        qty      TYPE i VALUE 8,
-        gwt      TYPE i VALUE 9,
-        nwt      TYPE i VALUE 10,
-        hsn      TYPE i VALUE 11,
-        invoice  TYPE i VALUE 12,
-        packno   TYPE i VALUE 13,
-        pkg_type TYPE i VALUE 38,
-      END OF gc_col.
+    "! Column numbers (A = 1) of the item / key columns. Found from the
+    "! HEADING ROW, so the column order of the file does not matter: the
+    "! FS template "Format" sheet (items A-K, invoice L, packing list M)
+    "! and the "Technical detail" order used in Sample_data_ABAP.xlsx
+    "! (packing list A, invoice B, items C-M) are both read correctly.
+    TYPES:
+      BEGIN OF ty_col,
+        sn       TYPE i,
+        inv_sn   TYPE i,
+        artno    TYPE i,
+        std      TYPE i,
+        art      TYPE i,
+        partno   TYPE i,
+        matdesc  TYPE i,
+        qty      TYPE i,
+        gwt      TYPE i,
+        nwt      TYPE i,
+        hsn      TYPE i,
+        invoice  TYPE i,
+        packno   TYPE i,
+        pkg_type TYPE i,
+      END OF ty_col.
+
+    DATA ms_col TYPE ty_col.
+    "! Header columns of the file (pattern -> column)
+    DATA mt_map TYPE tt_map.
 
     "! Messages go to the file or to the packing list being processed
     DATA mr_messages TYPE REF TO bapiret2_t.
@@ -124,10 +136,11 @@ CLASS zcl_sd_epack_upload DEFINITION
       RETURNING VALUE(rt_rows) TYPE tt_rows
       RAISING   zcx_sd_epack.
 
-    METHODS check_template
+    "! Find every column by its heading; missing mandatory columns = error
+    METHODS build_column_map
       IMPORTING is_row TYPE ty_row.
 
-    "! Split rows by packing list number (carry-forward of column M)
+    "! Split rows by packing list number (carry-forward)
     METHODS split_by_packing_list
       IMPORTING it_rows        TYPE tt_rows
       RETURNING VALUE(rt_pl)   TYPE tt_pl_rows.
@@ -159,6 +172,10 @@ CLASS zcl_sd_epack_upload DEFINITION
 
     CLASS-METHODS header_map
       RETURNING VALUE(rt_map) TYPE tt_map.
+
+    CLASS-METHODS normalize
+      IMPORTING iv_text        TYPE csequence
+      RETURNING VALUE(rv_text) TYPE string.
 
     CLASS-METHODS column_name
       IMPORTING iv_col         TYPE i
@@ -229,7 +246,7 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
       RETURN.
     ENDIF.
 
-    check_template( it_rows[ 1 ] ).
+    build_column_map( it_rows[ 1 ] ).
     IF zcl_sd_epack_rules=>has_errors( lt_file_msg ).
       et_messages = lt_file_msg.
       RETURN.
@@ -346,18 +363,64 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
   ENDMETHOD.
 
 
-  METHOD check_template.
+  METHOD build_column_map.
 
-    " Loose check: column A must be "Sl.No." and column M "Packing list no"
-    " - catches files in a wrong or shifted layout.
-    DATA(lv_a) = to_upper( cell( is_row = is_row iv_col = gc_col-sn ) ).
-    DATA(lv_m) = to_upper( cell( is_row = is_row iv_col = gc_col-packno ) ).
+    " Item and key columns: regex on the normalized heading text
+    TYPES: BEGIN OF ty_key,
+             name  TYPE string,
+             regex TYPE string,
+             label TYPE string,
+             must  TYPE abap_bool,
+           END OF ty_key.
+    DATA lt_keys TYPE STANDARD TABLE OF ty_key WITH EMPTY KEY.
 
-    IF lv_a NS 'SL'.
-      add( iv_no = '016' iv_v1 = 'A' iv_v2 = cell( is_row = is_row iv_col = gc_col-sn ) ).
-    ENDIF.
-    IF lv_m NS 'PACKING'.
-      add( iv_no = '016' iv_v1 = 'M' iv_v2 = cell( is_row = is_row iv_col = gc_col-packno ) ).
+    lt_keys = VALUE #(
+      ( name = `SN`       regex = `^(SLNO|SNO|SERIALNO)$`              label = `Sl.No.`             must = abap_true )
+      ( name = `INV_SN`   regex = `^SRNOINV`                           label = `Sr.No. INV` )
+      ( name = `ARTNO`    regex = `^ARTICLENO`                         label = `Article No.` )
+      ( name = `STD`      regex = `^STD$`                              label = `STD` )
+      ( name = `ART`      regex = `^(ARTICLES|NOOFARTICLES)$`          label = `Articles` )
+      ( name = `PARTNO`   regex = `^PARTNO`                            label = `Part No.`           must = abap_true )
+      ( name = `MATDESC`  regex = `^(PRODUCT|MATERIAL)DESCRIPTION`     label = `Product Description` )
+      ( name = `QTY`      regex = `^(QUANTITY|QTY)`                    label = `Quantity`           must = abap_true )
+      ( name = `GWT`      regex = `^GROSSW`                            label = `Gross Wt.` )
+      ( name = `NWT`      regex = `^NETW`                              label = `Net Wt.` )
+      ( name = `HSN`      regex = `^(HSCODE|HSNCODE|HSN)$`             label = `H.S Code` )
+      ( name = `INVOICE`  regex = `^(SAP)?(TAX)?INVOICE(NUMBER|NO)S?$` label = `SAP Invoice Number` must = abap_true )
+      ( name = `PACKNO`   regex = `^PA[A-Z]*LISTN(O|UMBER)$`           label = `Packing list no`    must = abap_true )
+      ( name = `PKG_TYPE` regex = `^PACKAGETYPE`                       label = `Package Type` ) ).
+
+    DATA(lt_heading) = VALUE string_table( FOR lv_cell IN is_row-cells ( normalize( lv_cell ) ) ).
+
+    LOOP AT lt_keys INTO DATA(ls_key).
+      DATA(lv_col) = 0.
+      LOOP AT lt_heading INTO DATA(lv_heading).
+        IF lv_heading IS NOT INITIAL AND matches( val = lv_heading regex = ls_key-regex ).
+          lv_col = sy-tabix.
+          EXIT.
+        ENDIF.
+      ENDLOOP.
+      IF lv_col = 0 AND ls_key-must = abap_true.
+        add( iv_no = '016' iv_v1 = ls_key-label ).
+      ENDIF.
+      ASSIGN COMPONENT ls_key-name OF STRUCTURE ms_col TO FIELD-SYMBOL(<lv_col>).
+      IF sy-subrc = 0.
+        <lv_col> = lv_col.
+      ENDIF.
+    ENDLOOP.
+
+    " Header columns (logic sheet "Pass ZSD_PACKNO get ...")
+    mt_map = header_map( ).
+    LOOP AT mt_map ASSIGNING FIELD-SYMBOL(<ls_map>).
+      LOOP AT lt_heading INTO lv_heading.
+        IF lv_heading IS NOT INITIAL AND matches( val = lv_heading regex = <ls_map>-regex ).
+          <ls_map>-col = sy-tabix.
+          EXIT.
+        ENDIF.
+      ENDLOOP.
+    ENDLOOP.
+    IF NOT line_exists( mt_map[ field = 'ZSD_PACKDT' ] ) OR mt_map[ field = 'ZSD_PACKDT' ]-col = 0.
+      add( iv_no = '016' iv_v1 = `Packing list date` ).
     ENDIF.
 
   ENDMETHOD.
@@ -369,7 +432,7 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
 
     LOOP AT it_rows INTO DATA(ls_row).
 
-      DATA(lv_packno) = cell( is_row = ls_row iv_col = gc_col-packno ).
+      DATA(lv_packno) = cell( is_row = ls_row iv_col = ms_col-packno ).
       IF lv_packno IS NOT INITIAL.
         IF strlen( lv_packno ) > 10.
           add( iv_no = '022' iv_v1 = ls_row-row iv_v2 = 'M' iv_v3 = 10 ).
@@ -405,12 +468,13 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
     DATA lv_num        TYPE decfloat34.
     DATA lv_inv_found  TYPE i.
 
-    DATA(lt_map) = header_map( ).
+    DATA(lt_map) = mt_map.
+    DELETE lt_map WHERE col = 0.
 
     LOOP AT it_rows INTO DATA(ls_row).
 
       " Invoices: every row of the packing list may carry one or more
-      DATA(lv_inv) = cell( is_row = ls_row iv_col = gc_col-invoice ).
+      DATA(lv_inv) = cell( is_row = ls_row iv_col = ms_col-invoice ).
       IF lv_inv IS NOT INITIAL.
         zcl_sd_epack_rules=>split_invoices( EXPORTING iv_text    = lv_inv
                                             IMPORTING et_vbeln   = DATA(lt_vbeln)
@@ -507,9 +571,9 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
 
       " A line item needs a Sl.No.; other rows (total row of the template,
       " header-only rows) are not line items
-      IF cell( is_row = ls_row iv_col = gc_col-sn ) IS INITIAL.
-        IF cell( is_row = ls_row iv_col = gc_col-partno ) IS NOT INITIAL
-           OR cell( is_row = ls_row iv_col = gc_col-qty ) IS NOT INITIAL.
+      IF cell( is_row = ls_row iv_col = ms_col-sn ) IS INITIAL.
+        IF cell( is_row = ls_row iv_col = ms_col-partno ) IS NOT INITIAL
+           OR cell( is_row = ls_row iv_col = ms_col-qty ) IS NOT INITIAL.
           lv_ignored += 1.
         ENDIF.
         CONTINUE.
@@ -517,30 +581,30 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
 
       DATA(ls_line) = VALUE zif_sd_epack=>ts_upload_line( row = ls_row-row ).
 
-      ls_line-sn     = number( is_row = ls_row iv_col = gc_col-sn     iv_integer = abap_true ).
-      ls_line-inv_sn = number( is_row = ls_row iv_col = gc_col-inv_sn iv_integer = abap_true ).
-      ls_line-std    = number( is_row = ls_row iv_col = gc_col-std    iv_integer = abap_true ).
-      ls_line-art    = number( is_row = ls_row iv_col = gc_col-art    iv_integer = abap_true ).
-      ls_line-qty    = round( val = number( is_row = ls_row iv_col = gc_col-qty ) dec = 3 ).
-      ls_line-gwt    = round( val = number( is_row = ls_row iv_col = gc_col-gwt ) dec = 3 ).
-      ls_line-nwt    = round( val = number( is_row = ls_row iv_col = gc_col-nwt ) dec = 3 ).
+      ls_line-sn     = number( is_row = ls_row iv_col = ms_col-sn     iv_integer = abap_true ).
+      ls_line-inv_sn = number( is_row = ls_row iv_col = ms_col-inv_sn iv_integer = abap_true ).
+      ls_line-std    = number( is_row = ls_row iv_col = ms_col-std    iv_integer = abap_true ).
+      ls_line-art    = number( is_row = ls_row iv_col = ms_col-art    iv_integer = abap_true ).
+      ls_line-qty    = round( val = number( is_row = ls_row iv_col = ms_col-qty ) dec = 3 ).
+      ls_line-gwt    = round( val = number( is_row = ls_row iv_col = ms_col-gwt ) dec = 3 ).
+      ls_line-nwt    = round( val = number( is_row = ls_row iv_col = ms_col-nwt ) dec = 3 ).
 
       " Empty cell = merged cell, i.e. part of the group above (A06)
-      ls_line-art_filled = xsdbool( cell( is_row = ls_row iv_col = gc_col-art ) IS NOT INITIAL ).
-      ls_line-gwt_filled = xsdbool( cell( is_row = ls_row iv_col = gc_col-gwt ) IS NOT INITIAL ).
-      ls_line-nwt_filled = xsdbool( cell( is_row = ls_row iv_col = gc_col-nwt ) IS NOT INITIAL ).
+      ls_line-art_filled = xsdbool( cell( is_row = ls_row iv_col = ms_col-art ) IS NOT INITIAL ).
+      ls_line-gwt_filled = xsdbool( cell( is_row = ls_row iv_col = ms_col-gwt ) IS NOT INITIAL ).
+      ls_line-nwt_filled = xsdbool( cell( is_row = ls_row iv_col = ms_col-nwt ) IS NOT INITIAL ).
 
-      DATA(lv_artno)   = cell( is_row = ls_row iv_col = gc_col-artno ).
-      DATA(lv_partno)  = cell( is_row = ls_row iv_col = gc_col-partno ).
-      DATA(lv_matdesc) = cell( is_row = ls_row iv_col = gc_col-matdesc ).
-      DATA(lv_hsn)     = cell( is_row = ls_row iv_col = gc_col-hsn ).
-      DATA(lv_pkg)     = cell( is_row = ls_row iv_col = gc_col-pkg_type ).
+      DATA(lv_artno)   = cell( is_row = ls_row iv_col = ms_col-artno ).
+      DATA(lv_partno)  = cell( is_row = ls_row iv_col = ms_col-partno ).
+      DATA(lv_matdesc) = cell( is_row = ls_row iv_col = ms_col-matdesc ).
+      DATA(lv_hsn)     = cell( is_row = ls_row iv_col = ms_col-hsn ).
+      DATA(lv_pkg)     = cell( is_row = ls_row iv_col = ms_col-pkg_type ).
 
-      check_length( iv_row = ls_row-row iv_col = gc_col-artno    iv_text = lv_artno   iv_max = 15 ).
-      check_length( iv_row = ls_row-row iv_col = gc_col-partno   iv_text = lv_partno  iv_max = 40 ).
-      check_length( iv_row = ls_row-row iv_col = gc_col-matdesc  iv_text = lv_matdesc iv_max = 40 ).
-      check_length( iv_row = ls_row-row iv_col = gc_col-hsn      iv_text = lv_hsn     iv_max = 17 ).
-      check_length( iv_row = ls_row-row iv_col = gc_col-pkg_type iv_text = lv_pkg     iv_max = 20 ).
+      check_length( iv_row = ls_row-row iv_col = ms_col-artno    iv_text = lv_artno   iv_max = 15 ).
+      check_length( iv_row = ls_row-row iv_col = ms_col-partno   iv_text = lv_partno  iv_max = 40 ).
+      check_length( iv_row = ls_row-row iv_col = ms_col-matdesc  iv_text = lv_matdesc iv_max = 40 ).
+      check_length( iv_row = ls_row-row iv_col = ms_col-hsn      iv_text = lv_hsn     iv_max = 17 ).
+      check_length( iv_row = ls_row-row iv_col = ms_col-pkg_type iv_text = lv_pkg     iv_max = 20 ).
 
       ls_line-artno    = lv_artno.
       ls_line-partno   = to_upper( lv_partno ).
@@ -551,7 +615,7 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
       IF ls_line-partno IS INITIAL.
         add( iv_no = '017' iv_v1 = ls_row-row iv_v2 = 'Part No.' ).
       ENDIF.
-      IF cell( is_row = ls_row iv_col = gc_col-qty ) IS INITIAL.
+      IF cell( is_row = ls_row iv_col = ms_col-qty ) IS INITIAL.
         add( iv_no = '017' iv_v1 = ls_row-row iv_v2 = 'Quantity' ).
       ENDIF.
 
@@ -583,6 +647,11 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
       RETURN.
     ENDIF.
 
+    " Package values repeated on every row of a package instead of merged
+    " cells (Sample_data_ABAP.xlsx) -> one package group (A06)
+    zcl_sd_epack_rules=>collapse_repeated_groups( CHANGING ct_lines    = lt_lines
+                                                           ct_messages = mr_messages->* ).
+
     zcl_sd_epack_rules=>build_items( EXPORTING iv_packno   = cs_pl-packno
                                                it_lines    = lt_lines
                                      IMPORTING et_items    = cs_pl-items
@@ -593,6 +662,11 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
 
   METHOD cell.
     rv_text = VALUE #( is_row-cells[ iv_col ] OPTIONAL ).
+    " Placeholders such as "Fetch from logic" / "Fetch from material
+    " master" (Sample_data_ABAP.xlsx) mean: no value - derive it in SAP (A41)
+    IF rv_text IS NOT INITIAL AND matches( val = to_upper( rv_text ) regex = `^\s*FETCH FROM.*` ).
+      CLEAR rv_text.
+    ENDIF.
   ENDMETHOD.
 
 
@@ -629,36 +703,43 @@ CLASS zcl_sd_epack_upload IMPLEMENTATION.
 
   METHOD header_map.
 
-    " Column order and lengths of "Z table Format1.xlsx" / Technical detail.
-    " Column O "Exporter ReF" is NOT mapped: Technical detail marks
-    " ZSD_EXPREF "Not Req - This data will be fetched from SAP System"
-    " (logic sheet B11). Multi-line fields are wider than in the FS because
-    " the sample outputs do not fit into the FS lengths (A19).
+    " Header fields with their headings in "Z table Format1.xlsx" /
+    " Sample_data_ABAP.xlsx. The column is found by heading (BUILD_COLUMN_MAP).
+    " "Exporter ReF" is NOT mapped: Technical detail marks ZSD_EXPREF "Not
+    " Req - This data will be fetched from SAP System" (logic sheet B11).
+    " Multi-line fields are wider than in the FS because the sample outputs
+    " do not fit into the FS lengths (A19).
     rt_map = VALUE #(
-      ( col = 14 field = 'ZSD_PACKDT'    kind = 'D'               label = `Packing list date` )
-      ( col = 16 field = 'ZSD_PARTY_REF' kind = 'C' maxlen = 200  label = `Buyer's Reference No.` )
-      ( col = 17 field = 'ZSD_REF_DT'    kind = 'D'               label = `Buyer's Reference date` )
-      ( col = 18 field = 'ZSD_CNTY_ORGN' kind = 'C' maxlen = 20   label = `Country of origin` )
-      ( col = 19 field = 'ZSD_NP1'       kind = 'T' maxlen = 1333 label = `Notifier Party1` )
-      ( col = 20 field = 'ZSD_NP2'       kind = 'T' maxlen = 1333 label = `Notifier Party2` )
-      ( col = 21 field = 'ZSD_NP3'       kind = 'T' maxlen = 1333 label = `Notifier Party3` )
-      ( col = 22 field = 'ZSD_NP4'       kind = 'T' maxlen = 1333 label = `Notifier Party4` )
-      ( col = 23 field = 'ZSD_NP5'       kind = 'T' maxlen = 1333 label = `Notifier Party5` )
-      ( col = 24 field = 'ZSD_PREC'      kind = 'C' maxlen = 30   label = `Pre-Carriage` )
-      ( col = 25 field = 'ZSD_REC_PC'    kind = 'C' maxlen = 30   label = `Place of Receipt by Pre-carrier` )
-      ( col = 26 field = 'ZSD_POL'       kind = 'C' maxlen = 30   label = `Port of Loading` )
-      ( col = 27 field = 'ZSD_POD'       kind = 'C' maxlen = 30   label = `Port of Discharge` )
-      ( col = 28 field = 'ZSD_PLD'       kind = 'C' maxlen = 30   label = `Place of Delivery` )
-      ( col = 29 field = 'ZSD_MARK'      kind = 'T' maxlen = 255  label = `Marks & Nos.` )
-      ( col = 30 field = 'ZSD_VSL_FLT'   kind = 'C' maxlen = 30   label = `Vessel / Flight No.` )
-      ( col = 31 field = 'ZSD_CONT'      kind = 'T' maxlen = 1333 label = `Container No` )
-      ( col = 32 field = 'ZSD_NOPACK'    kind = 'T' maxlen = 255  label = `No. of Packages` )
-      ( col = 33 field = 'ZSD_HSN_DESC'  kind = 'T' maxlen = 1333 label = `Description of goods` )
-      ( col = 34 field = 'ZSD_PL_DECL'   kind = 'T' maxlen = 0    label = `Declaration of Packing list` )
-      ( col = 35 field = 'ZSD_ADV_AMT'   kind = 'A'               label = `Advance amount received` )
-      ( col = 36 field = 'ZSD_CMMT'      kind = 'T' maxlen = 1333 label = `Commercial terms of invoice` )
-      ( col = 37 field = 'ZSD_INV_DECL'  kind = 'T' maxlen = 0    label = `Declaration of Invoice` ) ).
+      ( regex = `^PA[A-Z]*LISTDATE$`         field = 'ZSD_PACKDT'    kind = 'D'               label = `Packing list date` )
+      ( regex = `^BUYERSREFERENCENO`         field = 'ZSD_PARTY_REF' kind = 'C' maxlen = 200  label = `Buyer's Reference No.` )
+      ( regex = `^BUYERSREFERENCEDATE`       field = 'ZSD_REF_DT'    kind = 'D'               label = `Buyer's Reference date` )
+      ( regex = `^COUNTRYOFORIGIN`           field = 'ZSD_CNTY_ORGN' kind = 'C' maxlen = 20   label = `Country of origin` )
+      ( regex = `^NOTIF(Y|IER)PARTY1$`       field = 'ZSD_NP1'       kind = 'T' maxlen = 1333 label = `Notifier Party1` )
+      ( regex = `^NOTIF(Y|IER)PARTY2$`       field = 'ZSD_NP2'       kind = 'T' maxlen = 1333 label = `Notifier Party2` )
+      ( regex = `^NOTIF(Y|IER)PARTY3$`       field = 'ZSD_NP3'       kind = 'T' maxlen = 1333 label = `Notifier Party3` )
+      ( regex = `^NOTIF(Y|IER)PARTY4$`       field = 'ZSD_NP4'       kind = 'T' maxlen = 1333 label = `Notifier Party4` )
+      ( regex = `^NOTIF(Y|IER)PARTY5$`       field = 'ZSD_NP5'       kind = 'T' maxlen = 1333 label = `Notifier Party5` )
+      ( regex = `^PRECARRIAGE`               field = 'ZSD_PREC'      kind = 'C' maxlen = 30   label = `Pre-Carriage` )
+      ( regex = `^PLACEOFRECEIPT`            field = 'ZSD_REC_PC'    kind = 'C' maxlen = 30   label = `Place of Receipt by Pre-carrier` )
+      ( regex = `^PORTOFLOADING`             field = 'ZSD_POL'       kind = 'C' maxlen = 30   label = `Port of Loading` )
+      ( regex = `^PORTOFDISCHARGE`           field = 'ZSD_POD'       kind = 'C' maxlen = 30   label = `Port of Discharge` )
+      ( regex = `^PLACEOFDELIVERY`           field = 'ZSD_PLD'       kind = 'C' maxlen = 30   label = `Place of Delivery` )
+      ( regex = `^MARKS`                     field = 'ZSD_MARK'      kind = 'T' maxlen = 255  label = `Marks & Nos.` )
+      ( regex = `^VESSEL`                    field = 'ZSD_VSL_FLT'   kind = 'C' maxlen = 30   label = `Vessel / Flight No.` )
+      ( regex = `^CONTAINERNO`               field = 'ZSD_CONT'      kind = 'T' maxlen = 1333 label = `Container No` )
+      ( regex = `^NOOFPACKAGES`              field = 'ZSD_NOPACK'    kind = 'T' maxlen = 255  label = `No. of Packages` )
+      ( regex = `^DESCRIPTIONOFGOODS`        field = 'ZSD_HSN_DESC'  kind = 'T' maxlen = 1333 label = `Description of goods` )
+      ( regex = `^DECLARATIONOFPACKINGLIST`  field = 'ZSD_PL_DECL'   kind = 'T' maxlen = 0    label = `Declaration of Packing list` )
+      ( regex = `^ADVANCEAMOUNT`             field = 'ZSD_ADV_AMT'   kind = 'A'               label = `Advance amount received` )
+      ( regex = `^COMMERCIALTERMS`           field = 'ZSD_CMMT'      kind = 'T' maxlen = 1333 label = `Commercial terms of invoice` )
+      ( regex = `^DECLARATIONOFINVOICE`      field = 'ZSD_INV_DECL'  kind = 'T' maxlen = 0    label = `Declaration of Invoice` ) ).
 
+  ENDMETHOD.
+
+
+  METHOD normalize.
+    " "Buyer's Reference No. & Date:" -> "BUYERSREFERENCENODATE"
+    rv_text = replace( val = to_upper( iv_text ) regex = `[^A-Z0-9]` with = `` occ = 0 ).
   ENDMETHOD.
 
 

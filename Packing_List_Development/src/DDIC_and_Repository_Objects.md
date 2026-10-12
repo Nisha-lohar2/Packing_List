@@ -287,7 +287,7 @@ Generates `ENQUEUE_EZSD_EPACK` / `DEQUEUE_EZSD_EPACK` (parameter
 | `013` | `Notify parties exist for packing list &1 - use format with notify party` | data |
 | `014` | `Packing list &1 is locked by user &2 - not saved` | store |
 | `015` | `File &1 could not be read: &2` | upload |
-| `016` | `File is not the packing list template (column &1 heading "&2")` | upload |
+| `016` | `Column "&1" not found in the heading row of the file` | upload |
 | `017` | `Row &1: mandatory field &2 is empty` | upload |
 | `018` | `Row &1: "&2" in column &3 is not a valid number` | upload |
 | `019` | `Row &1: "&2" in column &3 is not a valid date` | upload |
@@ -328,6 +328,7 @@ Generates `ENQUEUE_EZSD_EPACK` / `DEQUEUE_EZSD_EPACK` (parameter
 | `065` | `Form &1 output for packing list &2` | report |
 | `066` | `&1 of &2 packing lists output, &3 saved, &4 with errors` | report |
 | `067` | `Validation only: &1 packing lists checked, &2 with errors` | report |
+| `068` | `Row &1: same Article No. &2 as the row above but different &3 - new package` | rules (warning) |
 
 ---
 
@@ -338,8 +339,8 @@ Generates `ENQUEUE_EZSD_EPACK` / `DEQUEUE_EZSD_EPACK` (parameter
 | `ZSD_EPACK` | Package | Container |
 | `ZIF_SD_EPACK` | Interface | Types, constants |
 | `ZCX_SD_EPACK` | Exception class | Errors with message list |
-| `ZCL_SD_EPACK_UPLOAD` | Class | Excel parsing, split by packing list number (**+ 20 unit tests**) |
-| `ZCL_SD_EPACK_RULES` | Class | Package groups, FS weight check, totals, formatting, parsing (**+ 26 unit tests**) |
+| `ZCL_SD_EPACK_UPLOAD` | Class | Excel parsing (columns found by heading), split by packing list number (**+ 22 unit tests**) |
+| `ZCL_SD_EPACK_RULES` | Class | Package groups (merged or repeated values), FS weight check, totals, formatting, parsing (**+ 28 unit tests**) |
 | `ZCL_SD_EPACK_DATA` | Class | Logic-sheet data retrieval for all packing lists in bulk, checks, form data |
 | `ZCL_SD_EPACK_OUTPUT` | Class | Smart Form call, PDF download, result list |
 | `ZCL_SD_EPACK_STORE` | Class | Save to `ZSD_EPACK_HDR/INV/DATA`, log to `ZSD_EPACK_LOG` |

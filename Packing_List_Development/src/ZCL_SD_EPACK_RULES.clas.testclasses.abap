@@ -22,6 +22,8 @@ CLASS ltc_rules DEFINITION FINAL
     METHODS duplicate_sl_no_rejected      FOR TESTING.
     METHODS descending_sl_no_rejected     FOR TESTING.
     METHODS package_type_carried_forward  FOR TESTING.
+    METHODS repeated_values_one_package   FOR TESTING.
+    METHODS same_artno_other_values_warns FOR TESTING.
 
     " FS 2.1 weight validation
     METHODS gross_below_net_is_error      FOR TESTING.
@@ -441,6 +443,54 @@ CLASS ltc_rules IMPLEMENTATION.
     cl_abap_unit_assert=>assert_equals( act = lt_lines
                                         exp = VALUE zif_sd_epack=>tt_text_line( ( `CSNU8464923-1X40' HC` )
                                                                                 ( `TCLU1466959-1X40' HC` ) ) ).
+
+  ENDMETHOD.
+
+  METHOD repeated_values_one_package.
+
+    " Sample_data_ABAP.xlsx rows 2-4: "1 to 50", 50 articles, 657 / 623 kg
+    " on every row of the package
+    DATA(lt_lines) = VALUE zif_sd_epack=>tt_upload_line(
+      ( row = 2 sn = 1 artno = '1 to 50' std = 1 art = 50 art_filled = abap_true partno = 'F-1A' qty = 106
+        gwt = 657 gwt_filled = abap_true nwt = 623 nwt_filled = abap_true )
+      ( row = 3 sn = 2 artno = '1 to 50' std = 1 art = 50 art_filled = abap_true partno = 'F-8A' qty = 105
+        gwt = 657 gwt_filled = abap_true nwt = 623 nwt_filled = abap_true )
+      ( row = 4 sn = 3 artno = '1 to 50' std = 1 art = 50 art_filled = abap_true partno = 'FG01' qty = 90
+        gwt = 657 gwt_filled = abap_true nwt = 623 nwt_filled = abap_true )
+      ( row = 5 sn = 4 artno = '51 to 90' std = 2 art = 40 art_filled = abap_true partno = 'FG02' qty = 101
+        gwt = 540 gwt_filled = abap_true nwt = 510 nwt_filled = abap_true ) ).
+    DATA lt_messages TYPE bapiret2_t.
+
+    zcl_sd_epack_rules=>collapse_repeated_groups( CHANGING ct_lines    = lt_lines
+                                                           ct_messages = lt_messages ).
+    DATA(ls_totals) = zcl_sd_epack_rules=>calc_totals( items( lt_lines ) ).
+
+    cl_abap_unit_assert=>assert_initial( lt_messages ).
+    cl_abap_unit_assert=>assert_equals( act = ls_totals-articles exp = 90 ).
+    cl_abap_unit_assert=>assert_equals( act = ls_totals-gross    exp = '1197.000' ).
+    cl_abap_unit_assert=>assert_equals( act = ls_totals-net      exp = '1133.000' ).
+    cl_abap_unit_assert=>assert_false( lt_lines[ 2 ]-art_filled ).
+    cl_abap_unit_assert=>assert_true( lt_lines[ 4 ]-art_filled ).
+
+  ENDMETHOD.
+
+
+  METHOD same_artno_other_values_warns.
+
+    DATA(lt_lines) = VALUE zif_sd_epack=>tt_upload_line(
+      ( row = 2 sn = 1 artno = '1 to 50' std = 1 art = 50 art_filled = abap_true partno = 'A' qty = 50
+        gwt = 657 gwt_filled = abap_true nwt = 623 nwt_filled = abap_true )
+      ( row = 3 sn = 2 artno = '1 to 50' std = 1 art = 50 art_filled = abap_true partno = 'B' qty = 50
+        gwt = 700 gwt_filled = abap_true nwt = 650 nwt_filled = abap_true ) ).
+    DATA lt_messages TYPE bapiret2_t.
+
+    zcl_sd_epack_rules=>collapse_repeated_groups( CHANGING ct_lines    = lt_lines
+                                                           ct_messages = lt_messages ).
+
+    " Articles repeated -> merged; weights differ -> kept, warning 068
+    cl_abap_unit_assert=>assert_false( lt_lines[ 2 ]-art_filled ).
+    cl_abap_unit_assert=>assert_true( lt_lines[ 2 ]-gwt_filled ).
+    cl_abap_unit_assert=>assert_equals( act = lt_messages[ 1 ]-number exp = '068' ).
 
   ENDMETHOD.
 

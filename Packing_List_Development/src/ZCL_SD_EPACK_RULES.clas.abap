@@ -50,6 +50,15 @@ CLASS zcl_sd_epack_rules DEFINITION
       EXPORTING et_items    TYPE zif_sd_epack=>tt_item
       CHANGING  ct_messages TYPE bapiret2_t.
 
+    "! Package values REPEATED on each row of a package (instead of merged
+    "! cells): consecutive lines with the same, non-empty Article No. and
+    "! the same Articles / Gross / Net values belong to one package, so the
+    "! repeated values are cleared on the following lines (A06). Same Article
+    "! No. with different values is kept as a new package (warning 068).
+    CLASS-METHODS collapse_repeated_groups
+      CHANGING ct_lines    TYPE zif_sd_epack=>tt_upload_line
+               ct_messages TYPE bapiret2_t.
+
     "! FS 2.1: "Gross Weight is always equal to or greater than the Net
     "! Weight ... error message: Invalid Weight: Gross Weight cannot be
     "! less than Net Weight." Checked per weight group (ASSUMPTION A07);
@@ -237,6 +246,55 @@ CLASS zcl_sd_epack_rules IMPLEMENTATION.
                       zsd_hsn      = ls_line-hsn )
              TO et_items.
 
+    ENDLOOP.
+
+  ENDMETHOD.
+
+
+  METHOD collapse_repeated_groups.
+
+    DATA ls_prev    TYPE zif_sd_epack=>ts_upload_line.
+    DATA lv_new_pkg TYPE abap_bool.
+
+    LOOP AT ct_lines ASSIGNING FIELD-SYMBOL(<ls_line>).
+
+      IF <ls_line>-artno IS NOT INITIAL AND <ls_line>-artno = ls_prev-artno.
+        lv_new_pkg = abap_false.
+
+        " Articles repeated -> continuation of the article group
+        IF <ls_line>-art_filled = abap_true AND ls_prev-art_filled = abap_true.
+          IF <ls_line>-art = ls_prev-art.
+            <ls_line>-art_filled = abap_false.
+            CLEAR <ls_line>-art.
+          ELSE.
+            APPEND msg( iv_type = 'W' iv_no = '068' iv_v1 = <ls_line>-row iv_v2 = <ls_line>-artno
+                        iv_v3 = 'Articles' ) TO ct_messages.
+            lv_new_pkg = abap_true.
+          ENDIF.
+        ENDIF.
+
+        " Gross + net repeated -> continuation of the weight group
+        IF <ls_line>-gwt_filled = abap_true AND <ls_line>-nwt_filled = abap_true
+           AND ls_prev-gwt_filled = abap_true AND ls_prev-nwt_filled = abap_true.
+          IF <ls_line>-gwt = ls_prev-gwt AND <ls_line>-nwt = ls_prev-nwt.
+            <ls_line>-gwt_filled = abap_false.
+            <ls_line>-nwt_filled = abap_false.
+            CLEAR: <ls_line>-gwt, <ls_line>-nwt.
+          ELSE.
+            APPEND msg( iv_type = 'W' iv_no = '068' iv_v1 = <ls_line>-row iv_v2 = <ls_line>-artno
+                        iv_v3 = 'Gross/Net Wt.' ) TO ct_messages.
+            lv_new_pkg = abap_true.
+          ENDIF.
+        ENDIF.
+
+        " Compare the next line with the package values, not the cleared
+        " ones - unless this line started a new package
+        IF lv_new_pkg = abap_false.
+          CONTINUE.
+        ENDIF.
+      ENDIF.
+
+      ls_prev = <ls_line>.
     ENDLOOP.
 
   ENDMETHOD.
