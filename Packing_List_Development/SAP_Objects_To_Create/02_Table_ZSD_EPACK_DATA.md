@@ -1,0 +1,64 @@
+# 02 — Transparent table `ZSD_EPACK_DATA` (SE11) — the only Z table (log)
+
+**Short description:** Export packing list — log of printed packing lists
+
+| Attribute | Value |
+|---|---|
+| Delivery class | `A` (application table) |
+| Data browser / table view maint. | Display / maintenance allowed with restrictions (no maintenance — written only by `ZSD_EPACK_PRINT`) |
+| Technical settings | Data class `APPL1`, size category `0`, buffering not allowed, log data changes ✔ |
+| Enhancement category | Can be enhanced (character-type or numeric) |
+
+One row per line item; header fields repeated on every row; `VBRK_VBELN` holds **all
+invoice numbers of the packing list** in one STRING (e.g. `1000000348, 1000000349, 1000000350`).
+A STRING cannot be a key field, therefore the key is `MANDT` + `ZSD_PACKNO` + `ZSD_SN`.
+
+| Field | Key | Data element | Currency / quantity reference | Content |
+|---|:---:|---|---|---|
+| `MANDT` | ✔ | `MANDT` |  |  |
+| `ZSD_PACKNO` | ✔ | `ZSD_PACKNO` |  | Packing list no |
+| `ZSD_SN` | ✔ | `ZSD_SN` |  | Sl.No. |
+| `VBRK_VBELN` |  | `ZSD_INVOICES` (STRING) |  | SAP Invoice Number — all invoices, comma-separated |
+| `ZSD_INV_SN` |  | `ZSD_INV_SN` |  | Sr.No. INV |
+| `ZSD_ARTNO` |  | `ZSD_ARTNO` |  | Article No. |
+| `ZSD_STD` |  | `ZSD_STD` |  | STD |
+| `ZSD_ART` |  | `ZSD_ART` |  | Articles (first line of a package only) |
+| `ZSD_TART` |  | `ZSD_TART` |  | Total Articles — calculated, same on every row |
+| `ZSD_PARTNO` |  | `ZSD_PARTNO` |  | Part No. |
+| `ZSD_MATDESC` |  | `ZSD_MATDESC` |  | Product Description (as uploaded) |
+| `ZSD_QTY` |  | `ZSD_QTY` | `ZSD_MEINS` | Quantity |
+| `ZSD_GWT` |  | `ZSD_GWT` | `ZSD_GEWEI` | Gross Wt. (first line of a package only) |
+| `ZSD_NWT` |  | `ZSD_NWT` | `ZSD_GEWEI` | Net Wt. (first line of a package only) |
+| `ZSD_HSN` |  | `ZSD_HSN` |  | H.S Code (as uploaded) |
+| `ZSD_PACKDT` |  | `ZSD_PACKDT` |  | Packing list date |
+| `ZSD_EXPREF` |  | `ZSD_EXPREF` |  | Exporter Ref (not filled) |
+| `ZSD_PARTY_REF` |  | `ZSD_PARTY_REF` |  | Buyer's Reference No. |
+| `ZSD_REF_DT` |  | `ZSD_REF_DT` |  | Buyer's Reference date |
+| `ZSD_CNTY_ORGN` |  | `ZSD_CNTY_ORGN` |  | Country of origin |
+| `ZSD_NP1` | | `ZSD_NP` | | Notify party 1 |
+| `ZSD_NP2` | | `ZSD_NP` | | Notify party 2 |
+| `ZSD_NP3` | | `ZSD_NP` | | Notify party 3 |
+| `ZSD_NP4` | | `ZSD_NP` | | Notify party 4 |
+| `ZSD_NP5` | | `ZSD_NP` | | Notify party 5 |
+| `ZSD_PREC` |  | `ZSD_PREC` |  | Pre-Carriage |
+| `ZSD_REC_PC` |  | `ZSD_REC_PC` |  | Place of Receipt by Pre-carrier |
+| `ZSD_POL` |  | `ZSD_POL` |  | Port of Loading |
+| `ZSD_POD` |  | `ZSD_POD` |  | Port of Discharge |
+| `ZSD_PLD` |  | `ZSD_PLD` |  | Place of Delivery |
+| `ZSD_MARK` |  | `ZSD_MARK` |  | Marks & Nos. |
+| `ZSD_VSL_FLT` |  | `ZSD_VSL_FLT` |  | Vessel / Flight No. |
+| `ZSD_CONT` |  | `ZSD_CONT` |  | Container No |
+| `ZSD_NOPACK` |  | `ZSD_NOPACK` |  | No. of Packages |
+| `ZSD_HSN_DESC` |  | `ZSD_HSN_DESC` |  | Description of goods |
+| `ZSD_PL_DECL` |  | `ZSD_PL_DECL` |  | Declaration of Packing list |
+| `ZSD_ADV_AMT` |  | `ZSD_ADV_AMT` | `ZSD_WAERS` | Advance amount received |
+| `ZSD_CMMT` |  | `ZSD_CMMT` |  | Commercial terms of invoice |
+| `ZSD_INV_DECL` |  | `ZSD_INV_DECL` |  | Declaration of Invoice |
+| `ZSD_MEINS` |  | `MEINS` |  | unit reference for `ZSD_QTY` |
+| `ZSD_GEWEI` |  | `GEWEI` |  | unit reference for weights |
+| `ZSD_WAERS` |  | `WAERS` |  | currency reference for `ZSD_ADV_AMT` |
+
+**Currency / quantity fields tab:** `ZSD_QTY` → `ZSD_EPACK_DATA-ZSD_MEINS`;
+`ZSD_GWT`, `ZSD_NWT` → `ZSD_EPACK_DATA-ZSD_GEWEI`; `ZSD_ADV_AMT` → `ZSD_EPACK_DATA-ZSD_WAERS`.
+
+Check after activation: SE14 shows the table created in the database; total field count 42.
