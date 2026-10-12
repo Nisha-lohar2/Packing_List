@@ -28,7 +28,7 @@ headings in row 1, one packing list in rows 2–10.
 | FS weight rule | Passed (657 ≥ 623, 540 ≥ 510, 330 ≥ 290) |
 | HSN / description | HSN from `MARC-STEUC` of each Part No. in the billing plant. Description from column I. Section heading / description of goods "PVC Pipes - 39172390" when the material HSN is 39172390. |
 | Warnings | 7 × message 029: quantity ≠ STD × Articles (Sl.No. 1, 2, 3, 4, 6, 7, 9). Not blocking. |
-| Saved / log | After output: `ZSD_EPACK_HDR` 1 row, `ZSD_EPACK_INV` 3 rows, `ZSD_EPACK_DATA` 9 rows (as uploaded); `ZSD_EPACK_LOG` 1 row, status **W** (because of the warnings) |
+| Log table | After output: `ZSD_EPACK_DATA` **9 rows** (ZSD_PACKNO 90000088, ZSD_SN 1–9), header fields repeated on each row, `VBRK_VBELN` = "1000000348, 1000000349, 1000000350" on every row, `ZSD_TART` = 120. Message 032. Result status **W** (because of the warnings) |
 
 ## 3. Points for the business to check in this file
 

@@ -4,11 +4,7 @@
 *& Selection screen and selection-screen events
 *&---------------------------------------------------------------------*
 SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE TEXT-b01.
-PARAMETERS p_xls   RADIOBUTTON GROUP src DEFAULT 'X' USER-COMMAND src.
-PARAMETERS p_file  TYPE rlgrap-filename LOWER CASE MODIF ID xls.
-PARAMETERS p_saved RADIOBUTTON GROUP src.
-SELECT-OPTIONS s_vbeln  FOR gv_vbeln  MODIF ID sav.
-SELECT-OPTIONS s_packno FOR gv_packno MODIF ID sav.
+PARAMETERS p_file  TYPE rlgrap-filename LOWER CASE.
 SELECTION-SCREEN END OF BLOCK b1.
 
 SELECTION-SCREEN BEGIN OF BLOCK b2 WITH FRAME TITLE TEXT-b02.
@@ -32,10 +28,6 @@ AT SELECTION-SCREEN OUTPUT.
 *----------------------------------------------------------------------*
   LOOP AT SCREEN.
     CASE screen-group1.
-      WHEN 'XLS'.
-        screen-active = COND #( WHEN p_xls = abap_true THEN '1' ELSE '0' ).
-      WHEN 'SAV'.
-        screen-active = COND #( WHEN p_saved = abap_true THEN '1' ELSE '0' ).
       WHEN 'PDF'.
         screen-active = COND #( WHEN p_pdf = abap_true THEN '1' ELSE '0' ).
       WHEN OTHERS.
@@ -58,11 +50,8 @@ AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_dir.
 AT SELECTION-SCREEN.
 *----------------------------------------------------------------------*
   IF sy-ucomm = 'ONLI' OR sy-ucomm = 'PRIN'.
-    IF p_xls = abap_true AND p_file IS INITIAL.
+    IF p_file IS INITIAL.
       MESSAGE e017(zsd_epack) WITH '-' 'Excel file'.
-    ENDIF.
-    IF p_saved = abap_true AND s_vbeln[] IS INITIAL AND s_packno[] IS INITIAL.
-      MESSAGE e003(zsd_epack).
     ENDIF.
     IF p_pdf = abap_true AND p_check = abap_false AND p_dir IS INITIAL.
       MESSAGE e054(zsd_epack).

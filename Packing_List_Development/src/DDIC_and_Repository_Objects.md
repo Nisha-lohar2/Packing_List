@@ -1,207 +1,115 @@
 # WRICEF 102-B "Export Consolidated Packing List" — DDIC & repository objects
 
-Package: **`ZSD_EPACK`** — all objects new. No SAP object is modified,
+Package: **`ZSD_EPACK`**. All objects are new. No SAP object is modified,
 appended or enhanced anywhere in this development.
 
-Assumption references (`Axx`) point to `docs/Development_Assumptions.md`;
-clarification references (`CL-xx`) to
-`docs/Packing_List_Requirement_Analysis_and_Development_Approach.md`.
+Assumption references (`Axx`) point to `docs/Development_Assumptions.md`.
 
 ---
 
-## 0. Deviation from the FS data model (read first)
+## 0. One Z table, as in the FS
 
-The FS names one table, `ZSD_EPACK_DATA`, keyed on `ZSD_PACKNO` +
-`VBRK_VBELN` (CHAR 255, "store multiple tax invoice"). That design cannot hold
-more than one line item per packing list and cannot be searched by invoice
-(analysis §6.5, CL-01). It is therefore split into three tables — **the FS
-name `ZSD_EPACK_DATA` is kept for the line items**:
+The FS names one Z table, **`ZSD_EPACK_DATA`** (FS §2.1, `Z table Format1.xlsx` ›
+Technical detail). It is the only Z table of this development. The report
+writes the data of every packing list it has output into it: this is the log
+of what was printed.
 
-| FS | Implemented | Why |
+Two technical points differ from the Technical-detail sheet, and both are unavoidable in SAP:
+
+| FS Technical detail | Implemented | Why |
 |---|---|---|
-| `ZSD_EPACK_DATA` (header + items + invoices in one row) | `ZSD_EPACK_HDR` — one row per packing list | Header data stored once |
-| `VBRK_VBELN` CHAR 255 (several invoices concatenated) | `ZSD_EPACK_INV` — one row per invoice | Selection by invoice (FS input), index, validation |
-| — | `ZSD_EPACK_DATA` — one row per line item, key `ZSD_PACKNO` + `ZSD_SN` | Many lines per packing list |
-| `ZSD_TART` (Total Articles) | not stored — calculated | Sample totals = Σ Articles (A08) |
-| `ZSD_VSl_FLT` | `ZSD_VSL_FLT` | DDIC names are upper case |
-| NP / container / packages / goods / declaration as CHAR 30…1500 | `SSTRING` / `STRING` | Sample texts exceed the FS lengths; CHAR 1500 exceeds the table limit (A19) |
-| — | Package-group fields `ZSD_ART_GRP`, `ZSD_WT_GRP`, `ZSD_PKG_TYPE` | Merged cells / subtotals of the samples (A06, A09) |
-| — | Audit / revision / print fields | Traceability, "Rev.1" sample (A22) |
+| Key `ZSD_PACKNO` + `VBRK_VBELN` | Key `MANDT` + `ZSD_PACKNO` + `ZSD_SN` | `VBRK_VBELN` holds **all invoice numbers of the packing list in one row** (requested), so it is a `STRING` field, and a `STRING` cannot be a key field. Sl.No. makes each line item unique. |
+| `VBRK_VBELN` CHAR 255 | `STRING`, e.g. `1000000348, 1000000349, 1000000350` | No length limit on the number of invoices |
+| QUAN / CURR fields | + `ZSD_MEINS`, `ZSD_GEWEI`, `ZSD_WAERS` | DDIC requires a unit / currency reference field for QUAN / CURR fields |
 
-**This deviation needs functional sign-off (CL-01).**
+Header fields are repeated on every line-item row, as in the FS layout.
 
 ---
 
-## 1. Domains and data elements — new
+## 1. Data elements — new
 
-Data element name = field name (FS "Tech name"), so that the FS template
-`Z table Format1.xlsx › Technical detail` maps 1:1.
+Data element name = field name (FS "Tech name").
 
-| Data element | Domain / type | Len | Dec | Description | FS |
-|---|---|---:|---:|---|---|
-| `ZSD_PACKNO` | `ZSD_PACKNO` CHAR, conversion `ALPHA`, value table `ZSD_EPACK_HDR` | 10 | | Packing list number | ✔ |
-| `ZSD_PACKDT` | `DATS` | 8 | | Packing list date | ✔ |
-| `ZSD_REVNO` | NUMC | 3 | | Revision (0 = original) | new |
-| `ZSD_BUKRS` | ref. `BUKRS` | 4 | | Company code of the invoices | new |
-| `ZSD_EXPREF` | CHAR | 20 | | Exporter's ref. — kept for the FS structure, **not filled** (Technical detail: "Not Req – fetched from SAP") | ✔ |
-| `ZSD_PARTY_REF` | CHAR | 200 | | Buyer's reference no. | ✔ |
-| `ZSD_REF_DT` | `DATS` | 8 | | Buyer's reference date | ✔ |
-| `ZSD_CNTY_ORGN` | CHAR | 20 | | Country of origin of goods | ✔ |
-| `ZSD_NP` | `SSTRING` | 1333 | | Notify party (multi-line). Used for `ZSD_NP1`…`ZSD_NP5`. | ✔ (FS 200) |
-| `ZSD_PREC` | CHAR | 30 | | Pre-carriage | ✔ |
-| `ZSD_REC_PC` | CHAR | 30 | | Place of receipt by pre-carrier | ✔ |
-| `ZSD_POL` / `ZSD_POD` / `ZSD_PLD` | CHAR | 30 | | Port of loading / discharge / place of delivery | ✔ |
-| `ZSD_VSL_FLT` | CHAR | 30 | | Vessel / flight no. | ✔ |
-| `ZSD_MARK` | `SSTRING` | 255 | | Marks & Nos. | ✔ (FS 30) |
-| `ZSD_CONT` | `SSTRING` | 1333 | | Container no(s). | ✔ (FS 100) |
-| `ZSD_NOPACK` | `SSTRING` | 255 | | No. of packages (text) | ✔ (FS 30) |
-| `ZSD_HSN_DESC` | `SSTRING` | 1333 | | Description of goods | ✔ (FS 100) |
-| `ZSD_PL_DECL` | `STRING` | | | Declaration of packing list | ✔ (FS 1500) |
-| `ZSD_ADV_AMT` | CURR | 15 | 2 | Advance amount received (commercial invoice) | ✔ |
-| `ZSD_CMMT` | `SSTRING` | 1333 | | Commercial terms of invoice | ✔ (FS 500) |
-| `ZSD_INV_DECL` | `STRING` | | | Declaration of invoice | ✔ (FS 1500) |
-| `ZSD_FILENAME` | `SSTRING` | 255 | | Uploaded file name | new |
-| `ZSD_SN` | NUMC | 6 | | Sl.No. | ✔ |
-| `ZSD_INV_SN` | NUMC | 6 | | Sr.No. of commercial-invoice line | ✔ |
-| `ZSD_ARTNO` | CHAR | 15 | | Article no. ("1 TO 60", "STACKER") | ✔ |
-| `ZSD_STD` | NUMC | 6 | | STD (pieces per article) | ✔ |
-| `ZSD_ART` | NUMC | 6 | | Articles (first line of article group only) | ✔ |
-| `ZSD_ART_GRP` | NUMC | 4 | | Article group (merged cells) | new |
-| `ZSD_WT_GRP` | NUMC | 4 | | Weight group (merged cells) | new |
-| `ZSD_PKG_TYPE` | CHAR | 20 | | Package type (Loose Pipes / Boxes / Bundles) | new |
-| `ZSD_PARTNO` | CHAR | 40 | | Part no. (= material no.) | ✔ |
-| `ZSD_MATDESC` | CHAR | 40 | | Product description | ✔ |
-| `ZSD_QTY` | QUAN | 13 | 3 | Quantity | ✔ |
-| `ZSD_GWT` / `ZSD_NWT` | QUAN | 13 | 3 | Gross / net weight (first line of weight group only) | ✔ |
-| `ZSD_QTY_UOM` | ref. `MEINS` | 3 | | Unit of quantity (`ST`) | new |
-| `ZSD_WT_UOM` | ref. `GEWEI` | 3 | | Unit of weight (`KG`) | new |
-| `ZSD_HSN` | CHAR | 17 | | H.S. code | ✔ |
-| `ZSD_EPACK_BLOCK` | CHAR | 10 | | Form text block id | new |
-| `ZSD_EPACK_ROW_TYPE` | CHAR, fixed values `H` heading / `I` item / `S` subtotal | 1 | | Printed row type | new |
-| `ZSD_EPACK_STATUS` | CHAR, fixed values `S` success / `W` warning / `E` error | 1 | | Processing status (log) | new |
-
-Audit fields reuse standard data elements: `ZSD_ERNAM`/`ZSD_AENAM`/`ZSD_PRNAM` → `ERNAM`/`AENAM`/`USNAM`,
-`*DAT` → `DATS`, `*ZET` → `TIMS`.
-
-> ⚠ **SAP-VERIFY** — the maximum length of `SSTRING` in a transparent table
-> is 1333 characters; tables containing `STRING` fields cannot be buffered
-> (not needed here).
+| Data element | Type | Len | Dec | Description |
+|---|---|---:|---:|---|
+| `ZSD_PACKNO` | CHAR, conversion `ALPHA` | 10 | | Packing list number |
+| `ZSD_SN` / `ZSD_INV_SN` | NUMC | 6 | | Sl.No. / Sr.No. INV |
+| `ZSD_ARTNO` | CHAR | 15 | | Article No. |
+| `ZSD_STD` / `ZSD_ART` / `ZSD_TART` | NUMC | 6 | | STD / Articles / Total Articles |
+| `ZSD_PARTNO` / `ZSD_MATDESC` | CHAR | 40 | | Part No. / Product description |
+| `ZSD_QTY` / `ZSD_GWT` / `ZSD_NWT` | QUAN | 13 | 3 | Quantity / Gross / Net weight |
+| `ZSD_HSN` | CHAR | 17 | | H.S. code |
+| `ZSD_PACKDT` / `ZSD_REF_DT` | DATS | 8 | | PL date / Buyer's ref. date |
+| `ZSD_EXPREF` | CHAR | 20 | | Exporter ref. (Technical detail: "Not Req – fetched from SAP"; not filled) |
+| `ZSD_PARTY_REF` | CHAR | 200 | | Buyer's reference no. |
+| `ZSD_CNTY_ORGN` | CHAR | 20 | | Country of origin |
+| `ZSD_NP` (for `ZSD_NP1`…`ZSD_NP5`) | `SSTRING` | 1333 | | Notify party (multi-line). FS: CHAR 200; the sample texts are longer (A19). |
+| `ZSD_PREC`, `ZSD_REC_PC`, `ZSD_POL`, `ZSD_POD`, `ZSD_PLD`, `ZSD_VSL_FLT` | CHAR | 30 | | Shipping fields |
+| `ZSD_MARK` / `ZSD_NOPACK` | `SSTRING` | 255 | | Marks / No. of packages (FS 30, multi-line) |
+| `ZSD_CONT` / `ZSD_HSN_DESC` / `ZSD_CMMT` | `SSTRING` | 1333 | | Containers / Description of goods / Commercial terms |
+| `ZSD_PL_DECL` / `ZSD_INV_DECL` | `STRING` | | | Declarations (FS CHAR 1500 exceeds the table limit) |
+| `ZSD_ADV_AMT` | CURR | 15 | 2 | Advance amount |
+| `ZSD_INVOICES` | `STRING` | | | All invoice numbers of the packing list (used for `VBRK_VBELN`) |
+| `ZSD_EPACK_BLOCK` | CHAR | 10 | | Form text block id (form interface) |
+| `ZSD_EPACK_ROW_TYPE` | CHAR, values `H` / `I` / `S` | 1 | | Printed row type (form interface) |
+| `ZSD_EPACK_STATUS` | CHAR, values `S` / `W` / `E` | 1 | | Status in the result list |
 
 ---
 
-## 2. Transparent tables — new
+## 2. Transparent table `ZSD_EPACK_DATA` — the only Z table (log)
 
-Common technical settings: delivery class **`A`**, data class `APPL1`,
-size category `0`, **no buffering**, log data changes **yes**,
-table maintenance **not allowed** (written only by `ZSD_EPACK`).
+Delivery class `A`, data class `APPL1`, size category `0`, no buffering,
+log data changes yes, table maintenance not allowed (written only by `ZSD_EPACK`).
 
-### 2.1 `ZSD_EPACK_HDR` — Packing list header
+| # | Field | Key | Data element | Logic sheet | Excel column (FS template) |
+|---|---|:---:|---|---|---|
+| 1 | `MANDT` | ✔ | `MANDT` | | |
+| 2 | `ZSD_PACKNO` | ✔ | `ZSD_PACKNO` | B9 | Packing list no |
+| 3 | `ZSD_SN` | ✔ | `ZSD_SN` | B47 | Sl.No. |
+| 4 | `VBRK_VBELN` | | `ZSD_INVOICES` (STRING) | input | SAP Invoice Number — all invoices, comma-separated |
+| 5 | `ZSD_INV_SN` | | `ZSD_INV_SN` | B48 | Sr.No. INV |
+| 6 | `ZSD_ARTNO` | | `ZSD_ARTNO` | B49 | Article No. |
+| 7 | `ZSD_STD` | | `ZSD_STD` | B50 | STD |
+| 8 | `ZSD_ART` | | `ZSD_ART` | B51 | Articles (first line of a package only) |
+| 9 | `ZSD_TART` | | `ZSD_TART` | B52 | Total Articles — calculated, same on every row |
+| 10 | `ZSD_PARTNO` | | `ZSD_PARTNO` | B53 | Part No. |
+| 11 | `ZSD_MATDESC` | | `ZSD_MATDESC` | B54 | Product Description (as uploaded) |
+| 12 | `ZSD_QTY` | | `ZSD_QTY` (ref. `ZSD_MEINS`) | B55 | Quantity |
+| 13 | `ZSD_GWT` | | `ZSD_GWT` (ref. `ZSD_GEWEI`) | B56 | Gross Wt. (first line of a package only) |
+| 14 | `ZSD_NWT` | | `ZSD_NWT` (ref. `ZSD_GEWEI`) | B57 | Net Wt. (first line of a package only) |
+| 15 | `ZSD_HSN` | | `ZSD_HSN` | B58 | H.S Code (as uploaded) |
+| 16 | `ZSD_PACKDT` | | `ZSD_PACKDT` | B10 | Packing list date |
+| 17 | `ZSD_EXPREF` | | `ZSD_EXPREF` | B11 | Exporter Ref (not filled) |
+| 18 | `ZSD_PARTY_REF` | | `ZSD_PARTY_REF` | B14 | Buyer's Reference No. |
+| 19 | `ZSD_REF_DT` | | `ZSD_REF_DT` | B14 | Buyer's Reference date |
+| 20 | `ZSD_CNTY_ORGN` | | `ZSD_CNTY_ORGN` | B16 | Country of origin |
+| 21–25 | `ZSD_NP1`…`ZSD_NP5` | | `ZSD_NP` | B31 | Notifier Party 1–5 |
+| 26 | `ZSD_PREC` | | `ZSD_PREC` | B33 | Pre-Carriage |
+| 27 | `ZSD_REC_PC` | | `ZSD_REC_PC` | B34 | Place of Receipt by Pre-carrier |
+| 28 | `ZSD_POL` | | `ZSD_POL` | B36 | Port of Loading |
+| 29 | `ZSD_POD` | | `ZSD_POD` | B37 | Port of Discharge |
+| 30 | `ZSD_PLD` | | `ZSD_PLD` | B38 | Place of Delivery |
+| 31 | `ZSD_MARK` | | `ZSD_MARK` | B39 | Marks & Nos. |
+| 32 | `ZSD_VSL_FLT` | | `ZSD_VSL_FLT` | B35 | Vessel / Flight No. |
+| 33 | `ZSD_CONT` | | `ZSD_CONT` | B40 | Container No |
+| 34 | `ZSD_NOPACK` | | `ZSD_NOPACK` | B41 | No. of Packages |
+| 35 | `ZSD_HSN_DESC` | | `ZSD_HSN_DESC` | B42 | Description of goods |
+| 36 | `ZSD_PL_DECL` | | `ZSD_PL_DECL` | B61 | Declaration of Packing list |
+| 37 | `ZSD_ADV_AMT` | | `ZSD_ADV_AMT` (ref. `ZSD_WAERS`) | — | Advance amount received |
+| 38 | `ZSD_CMMT` | | `ZSD_CMMT` | — | Commercial terms of invoice |
+| 39 | `ZSD_INV_DECL` | | `ZSD_INV_DECL` | — | Declaration of Invoice |
+| 40 | `ZSD_MEINS` | | `MEINS` (value `ST`) | | unit reference for `ZSD_QTY` |
+| 41 | `ZSD_GEWEI` | | `GEWEI` (value `KG`) | | unit reference for weights |
+| 42 | `ZSD_WAERS` | | `WAERS` | | currency reference for `ZSD_ADV_AMT` |
 
-| # | Field | Key | Data element | Ref. field |
-|---|---|:---:|---|---|
-| 1 | `MANDT` | ✔ | `MANDT` | |
-| 2 | `ZSD_PACKNO` | ✔ | `ZSD_PACKNO` | |
-| 3 | `ZSD_PACKDT` | | `ZSD_PACKDT` | |
-| 4 | `ZSD_REVNO` | | `ZSD_REVNO` | |
-| 5 | `ZSD_BUKRS` | | `BUKRS` | |
-| 6 | `ZSD_EXPREF` | | `ZSD_EXPREF` | |
-| 7 | `ZSD_PARTY_REF` | | `ZSD_PARTY_REF` | |
-| 8 | `ZSD_REF_DT` | | `ZSD_REF_DT` | |
-| 9 | `ZSD_CNTY_ORGN` | | `ZSD_CNTY_ORGN` | |
-| 10–14 | `ZSD_NP1` … `ZSD_NP5` | | `ZSD_NP` | |
-| 15 | `ZSD_PREC` | | `ZSD_PREC` | |
-| 16 | `ZSD_REC_PC` | | `ZSD_REC_PC` | |
-| 17 | `ZSD_VSL_FLT` | | `ZSD_VSL_FLT` | |
-| 18 | `ZSD_POL` | | `ZSD_POL` | |
-| 19 | `ZSD_POD` | | `ZSD_POD` | |
-| 20 | `ZSD_PLD` | | `ZSD_PLD` | |
-| 21 | `ZSD_MARK` | | `ZSD_MARK` | |
-| 22 | `ZSD_CONT` | | `ZSD_CONT` | |
-| 23 | `ZSD_NOPACK` | | `ZSD_NOPACK` | |
-| 24 | `ZSD_HSN_DESC` | | `ZSD_HSN_DESC` | |
-| 25 | `ZSD_PL_DECL` | | `ZSD_PL_DECL` | |
-| 26 | `ZSD_ADV_AMT` | | `ZSD_ADV_AMT` | `ZSD_ADV_WAERS` |
-| 27 | `ZSD_ADV_WAERS` | | `WAERS` | |
-| 28 | `ZSD_CMMT` | | `ZSD_CMMT` | |
-| 29 | `ZSD_INV_DECL` | | `ZSD_INV_DECL` | |
-| 30 | `ZSD_FILENAME` | | `ZSD_FILENAME` | |
-| 31–33 | `ZSD_ERNAM`, `ZSD_ERDAT`, `ZSD_ERZET` | | `ERNAM`, `DATS`, `TIMS` | |
-| 34–36 | `ZSD_AENAM`, `ZSD_AEDAT`, `ZSD_AEZET` | | `AENAM`, `DATS`, `TIMS` | |
-| 37–39 | `ZSD_PRNAM`, `ZSD_PRDAT`, `ZSD_PRZET` | | `USNAM`, `DATS`, `TIMS` | |
+**When rows are written:** at the end of a run (not in "Validate only"), for every
+packing list whose form was produced. One row per line item. If a packing list is
+uploaded again, its earlier rows are deleted and the new ones written.
+Packing lists with errors are not written; they appear only in the result list.
 
-Foreign key `ZSD_BUKRS` → `T001`.
-`ZSD_ADV_AMT`, `ZSD_CMMT` and `ZSD_INV_DECL` are commercial-invoice fields from the FS
-template. They are stored but not printed on the packing list (CL-17).
-
-### 2.2 `ZSD_EPACK_INV` — Packing list ↔ tax invoice
-
-| # | Field | Key | Data element |
-|---|---|:---:|---|
-| 1 | `MANDT` | ✔ | `MANDT` |
-| 2 | `ZSD_PACKNO` | ✔ | `ZSD_PACKNO` |
-| 3 | `VBELN` | ✔ | `VBELN_VF` |
-
-* Foreign keys: `ZSD_PACKNO` → `ZSD_EPACK_HDR`, `VBELN` → `VBRK`.
-* **Secondary index `Z01`**: `MANDT`, `VBELN` (non-unique). Used for the
-  selection by invoice in `ZSD_EPACK`.
-* An invoice may belong to **one** packing list only. This is enforced by the
-  upload, not by a unique index, so that the error message names the
-  conflicting packing list (A01).
-
-### 2.3 `ZSD_EPACK_DATA` — Packing list line items (FS table name)
-
-| # | Field | Key | Data element | Ref. field |
-|---|---|:---:|---|---|
-| 1 | `MANDT` | ✔ | `MANDT` | |
-| 2 | `ZSD_PACKNO` | ✔ | `ZSD_PACKNO` | |
-| 3 | `ZSD_SN` | ✔ | `ZSD_SN` | |
-| 4 | `ZSD_INV_SN` | | `ZSD_INV_SN` | |
-| 5 | `ZSD_ARTNO` | | `ZSD_ARTNO` | |
-| 6 | `ZSD_STD` | | `ZSD_STD` | |
-| 7 | `ZSD_ART` | | `ZSD_ART` | |
-| 8 | `ZSD_ART_GRP` | | `ZSD_ART_GRP` | |
-| 9 | `ZSD_WT_GRP` | | `ZSD_WT_GRP` | |
-| 10 | `ZSD_PKG_TYPE` | | `ZSD_PKG_TYPE` | |
-| 11 | `ZSD_PARTNO` | | `ZSD_PARTNO` | |
-| 12 | `ZSD_MATDESC` | | `ZSD_MATDESC` | |
-| 13 | `ZSD_QTY` | | `ZSD_QTY` | `ZSD_QTY_UOM` |
-| 14 | `ZSD_QTY_UOM` | | `MEINS` | |
-| 15 | `ZSD_GWT` | | `ZSD_GWT` | `ZSD_WT_UOM` |
-| 16 | `ZSD_NWT` | | `ZSD_NWT` | `ZSD_WT_UOM` |
-| 17 | `ZSD_WT_UOM` | | `GEWEI` | |
-| 18 | `ZSD_HSN` | | `ZSD_HSN` | |
-
-Foreign key `ZSD_PACKNO` → `ZSD_EPACK_HDR`.
-
-### 2.4 `ZSD_EPACK_LOG` — processing log (one row per packing list per run)
-
-Written by FORM `WRITE_LOG` (include `ZSD_EPACK_PRINT_F01`) at the end of every run of
-`ZSD_EPACK`, except "Validate only". It covers successful and failed packing lists.
-File-level problems get one extra row with an empty packing list number.
-Delivery class `A`, no buffering. **Request: "at last add the data in the Z table that was created for log"** (Q16).
-
-| # | Field | Key | Data element / type | Content |
-|---|---|:---:|---|---|
-| 1 | `MANDT` | ✔ | `MANDT` | |
-| 2 | `RUNID` | ✔ | `SYSUUID_C32` | One id per program run |
-| 3 | `ZSD_PACKNO` | ✔ | `ZSD_PACKNO` | Packing list (empty = file-level row) |
-| 4 | `SOURCE` | | CHAR 1 | `U` Excel upload / `R` reprint of saved data |
-| 5 | `FILENAME` | | `ZSD_FILENAME` | Uploaded file |
-| 6 | `XLS_ROWS` | | CHAR 20 | Excel rows of this packing list, e.g. "2-78" |
-| 7 | `INVOICES` | | `SSTRING` 1333 | Invoice numbers, comma-separated |
-| 8 | `INV_CNT` | | `INT4` | Number of invoices |
-| 9 | `ITEM_CNT` | | `INT4` | Number of line items |
-| 10 | `FORMNAME` | | `TDSFNAME` | Smart Form used |
-| 11 | `OUTPUT` | | CHAR 1 | `V` preview / `P` print / `F` PDF |
-| 12 | `OUTPUT_DONE` | | `XFELD` | Form produced |
-| 13 | `SAVED` | | `XFELD` | Data written to `ZSD_EPACK_HDR/INV/DATA` |
-| 14 | `STATUS` | | `ZSD_EPACK_STATUS` | `S` / `W` / `E` |
-| 15 | `MSG_TYPE` | | `BAPI_MTYPE` | Type of the most important message |
-| 16 | `MESSAGE` | | `BAPI_MSG` | First error, else first warning, else last success text |
-| 17 | `MSG_CNT` | | `INT4` | Number of messages |
-| 18 | `ERNAM` / `ERDAT` / `ERZET` | | `ERNAM` / `DATS` / `TIMS` | Who / when |
-
-Secondary index `Z01`: `MANDT`, `ZSD_PACKNO`. Display it with SE16N or the table view (no maintenance).
+**Example** (sample file `test_data/Sample_data_ABAP.xlsx`): 9 rows, `ZSD_PACKNO`
+`0090000088`, `ZSD_SN` 1–9, `VBRK_VBELN` = `1000000348, 1000000349, 1000000350`
+on every row, `ZSD_TART` = 120.
 
 ---
 
@@ -221,7 +129,6 @@ Both Smart Forms have the **same** form interface:
 |---|---|---|
 | `PACKNO` | `ZSD_PACKNO` | Packing List No. |
 | `PACKDT_TXT` | CHAR 10 | Date, DD-MM-YYYY |
-| `REVNO` | `ZSD_REVNO` | Revision (not printed by default, A22) |
 | `IEC` | CHAR 40 | Exporter's Ref. "IEC:…" |
 | `GSTIN` | CHAR 18 | GST No. |
 | `CIN` | CHAR 40 | CIN No. |
@@ -262,11 +169,12 @@ Both Smart Forms have the **same** form interface:
 
 ---
 
+
 ## 4. Lock object `EZSD_EPACK` — new (SE11)
 
-Primary table `ZSD_EPACK_HDR`, mode `E`, lock parameters `MANDT`, `ZSD_PACKNO`.
-Generates `ENQUEUE_EZSD_EPACK` / `DEQUEUE_EZSD_EPACK` (parameter
-`MODE_ZSD_EPACK_HDR`).
+Primary table `ZSD_EPACK_DATA`, mode `E`, lock parameters `MANDT`, `ZSD_PACKNO`.
+Generates `ENQUEUE_EZSD_EPACK` / `DEQUEUE_EZSD_EPACK` (parameter `MODE_ZSD_EPACK_DATA`).
+It prevents two users writing the same packing list at the same time.
 
 ---
 
@@ -276,16 +184,13 @@ Generates `ENQUEUE_EZSD_EPACK` / `DEQUEUE_EZSD_EPACK` (parameter
 |---|---|---|
 | `001` | `Invalid Weight: Gross Weight cannot be less than Net Weight.` **(FS 2.1, exact text)** | rules |
 | `002` | `Package from Sl.No. &1: gross weight &2 kg is less than net weight &3 kg` | rules |
-| `003` | `Enter at least one tax invoice or a packing list number` | report / data |
-| `004` | `Invoice &1 is not assigned to any saved packing list` | data (reprint) |
-| `006` | `Packing list &1 also contains invoice &2 - printed as part of it` | data (reprint) |
 | `008` | `Invoice &1 does not exist` | data |
 | `009` | `Invoice &1 is cancelled or is a cancellation document` | data |
 | `010` | `Billing type &2 of invoice &1 is not allowed for export packing lists` | data |
 | `011` | `Invoices &3 differ in &1 (&2) - one packing list needs one value` | data |
 | `012` | `No authorization: &1 &2, activity &3` | data / store |
 | `013` | `Notify parties exist for packing list &1 - use format with notify party` | data |
-| `014` | `Packing list &1 is locked by user &2 - not saved` | store |
+| `014` | `Packing list &1 is locked by user &2 - not written to the log table` | save |
 | `015` | `File &1 could not be read: &2` | upload |
 | `016` | `Column "&1" not found in the heading row of the file` | upload |
 | `017` | `Row &1: mandatory field &2 is empty` | upload |
@@ -299,7 +204,7 @@ Generates `ENQUEUE_EZSD_EPACK` / `DEQUEUE_EZSD_EPACK` (parameter
 | `029` | `Sl.No. &1: quantity &2 differs from STD &3 x Articles &4` | rules (warning) |
 | `030` | `Sl.No. &1: part no. &2 is not billed in the packing list invoices` | data (warning) |
 | `031` | `Notify party &1 is filled but notify party &2 is empty` | upload |
-| `032` | `Packing list &1 saved (revision &2, &3 lines, &4 invoices)` | store |
+| `032` | `Packing list &1 written to ZSD_EPACK_DATA (&2 lines, &3 invoices)` | save |
 | `036` | `The file contains no line items` | upload |
 | `038` | `PDF saved: &1` | report |
 | `039` | `Error &1 in &2` | output |
@@ -307,12 +212,11 @@ Generates `ENQUEUE_EZSD_EPACK` / `DEQUEUE_EZSD_EPACK` (parameter
 | `041` | `Row &1: Sl.No. &2 is not in ascending order` | rules |
 | `042` | `No &1 partner in KNVP for customer &2, sales area &3` | data |
 | `044` | `Sl.No. &1: no HSN code in upload or material master` | data (warning) |
-| `046` | `No packing list found for the selection` | data (reprint) |
-| `047` | `Packing list &1 has no valid invoices or no line items` | data |
+| `047` | `Packing list &1 has no valid invoices` | data |
 | `048` | `Sl.No. &1: no product description in upload or material master` | data (warning) |
 | `049` | `&1 not found - field stays empty on the output` | data (warning) |
 | `050` | `&1 rows without Sl.No. were ignored (e.g. total row)` | upload (info) |
-| `052` | `Packing list &1 could not be saved - database error` | store |
+| `052` | `Packing list &1 could not be written to ZSD_EPACK_DATA` | save |
 | `053` | `File &1 could not be written` | output |
 | `054` | `Enter a folder for the PDF download` | report |
 | `055` | `Row &1: no packing list number in or above this row - row ignored` | upload |
@@ -322,7 +226,6 @@ Generates `ENQUEUE_EZSD_EPACK` / `DEQUEUE_EZSD_EPACK` (parameter
 | `059` | `No packing list number found in the file` | upload / report |
 | `060` | `Customer &1 has &2 &3 partners in KNVP - &4 is used` | data (warning) |
 | `061` | `Sales order &1 has no reference document - no order no. / date` | data (warning) |
-| `062` | `The processing log could not be written (ZSD_EPACK_LOG)` | store |
 | `063` | `The result list could not be displayed` | output |
 | `064` | `Output of packing list &1 cancelled by the user` | report (warning) |
 | `065` | `Form &1 output for packing list &2` | report |
@@ -337,24 +240,17 @@ Generates `ENQUEUE_EZSD_EPACK` / `DEQUEUE_EZSD_EPACK` (parameter
 | Object | Type | Purpose |
 |---|---|---|
 | `ZSD_EPACK` | Package | Container |
+| `ZSD_EPACK_DATA` | Transparent table | **The only Z table** — log of printed packing lists (FS) |
+| `EZSD_EPACK` | Lock object | Lock per packing list |
+| `ZSD_S_EPACK_PRT_HDR`, `ZSD_S_EPACK_PRT_TXT`, `ZSD_S_EPACK_PRT_ITM` + table types | Structures | Smart Form interface (no database tables) |
+| `ZSD_EPACK` | Message class | Messages |
+| `ZSD_EPACK` | Authorization object | Print / write per company code |
 | `ZSD_EPACK_PRINT` | Executable program | Report frame, START-OF-SELECTION |
-| `ZSD_EPACK_PRINT_TOP` | Include | Types, constants, global data |
-| `ZSD_EPACK_PRINT_SEL` | Include | Selection screen and its events |
-| `ZSD_EPACK_PRINT_F01` | Include | Main FORM routines: upload, SAP data (bulk), forms, save, log, result list |
-| `ZSD_EPACK_PRINT_F02` | Include | Helper FORM routines: package groups, weight rule, totals, formatting, parsing |
-| `ZSD_EPACK_WITH_NP` | Smart Form | Format with notify parties (see `docs/ZSD_EPACK_SmartForm_Specification.md`) |
-| `ZSD_EPACK_WITHOUT_NP` | Smart Form | Format without notify parties |
-| `ZSD_EPACK_STYLE` | Smart Style | Shared paragraph / character formats |
-| `ZSD_EPACK_CROSS` | SE78 graphic (BMON) | Diagonal line for unused notify-party sections (A26) |
-
-### Transaction code (SE93)
-
-| T-code | Type | Program | Text |
-|---|---|---|---|
-| **`ZSD_EPACK`** (FS) | Report transaction, screen 1000 | `ZSD_EPACK_PRINT` | Export Packing List |
-
-The earlier separate upload transaction `ZSD_EPACK_UPL` / program `ZSD_EPACK_UPLOAD` has been withdrawn.
-Upload, form output and saving are now one run of `ZSD_EPACK`.
+| `ZSD_EPACK_PRINT_TOP` / `_SEL` / `_F01` / `_F02` | Includes | Types and data / selection screen / main FORMs / helper FORMs |
+| `ZSD_EPACK_WITH_NP`, `ZSD_EPACK_WITHOUT_NP` | Smart Forms | See `docs/ZSD_EPACK_SmartForm_Specification.md` |
+| `ZSD_EPACK_STYLE` | Smart Style | Shared formats |
+| `ZSD_EPACK_CROSS` | SE78 graphic | Diagonal line for unused notify-party sections |
+| **`ZSD_EPACK`** | Transaction (SE93) | Report transaction for `ZSD_EPACK_PRINT` (FS) |
 
 ---
 
@@ -363,12 +259,8 @@ Upload, form output and saving are now one run of `ZSD_EPACK`.
 | Object | Fields | Where |
 |---|---|---|
 | `S_TCODE` | `ZSD_EPACK` | Transaction start |
-| **`ZSD_EPACK`** (new, SU21, class `SD`) | `ACTVT` (01 create/save, 04 print), `BUKRS` | 04 per company code before a form is output; 01 before the data is saved |
-| `V_VBRK_VKO` | `VKORG`, `ACTVT` = 04 | Print — for each sales org. of the invoices |
-
-> Placeholder until security defines the concept (CL-22 / Q14). The checks are
-> isolated in FORMs `CHECK_AUTHORITY` and `SAVE_PACKING_LISTS`
-> (include `ZSD_EPACK_PRINT_F01`).
+| **`ZSD_EPACK`** (new, SU21, class `SD`) | `ACTVT` 04 print / 01 write log, `BUKRS` | FORMs `CHECK_AUTHORITY`, `SAVE_PACKING_LISTS` |
+| `V_VBRK_VKO` | `VKORG`, `ACTVT` = 04 | Print — per sales org. of the invoices |
 
 ---
 
@@ -376,9 +268,9 @@ Upload, form output and saving are now one run of `ZSD_EPACK`.
 
 | Object | Entry | Purpose |
 |---|---|---|
-| `TVARVC` select-option `ZSD_EPACK_FKART` | Export tax-invoice billing types (e.g. `I EQ ZEXP`) | Only these billing types are accepted. **Empty = all accepted** (A11). |
-| `T001Z` party `ZCIN` | CIN per company code | FS logic B7 — must exist (CL-27) |
-| Company address field `BUILDING` | IEC number | FS logic B11 (Q08) |
+| `TVARVC` select-option `ZSD_EPACK_FKART` | Export tax-invoice billing types | Only these billing types are accepted. Empty = all accepted (A11). |
+| `T001Z` party `ZCIN` | CIN per company code | Logic B7 |
+| Company address field `BUILDING` | IEC number | Logic B11 |
 
 ---
 
@@ -418,12 +310,11 @@ Every table is read **once per run** for all packing lists (FOR ALL ENTRIES).
 
 | Order | Objects |
 |---|---|
-| 1 | Domains, data elements |
-| 2 | Tables `ZSD_EPACK_HDR` → `ZSD_EPACK_INV` → `ZSD_EPACK_DATA` → `ZSD_EPACK_LOG`, indexes `Z01`, lock object |
-| 3 | Structures, table types |
+| 1 | Data elements |
+| 2 | Table `ZSD_EPACK_DATA`, lock object `EZSD_EPACK` |
+| 3 | Form-interface structures and table types |
 | 4 | Message class, authorization object |
-| 7 | Smart Style, SE78 graphic, both Smart Forms |
-| 8 | Program `ZSD_EPACK_PRINT` with includes `_TOP`, `_SEL`, `_F01`, `_F02`; transaction `ZSD_EPACK` |
+| 5 | Smart Style, SE78 graphic, both Smart Forms |
+| 6 | Program `ZSD_EPACK_PRINT` with includes `_TOP`, `_SEL`, `_F01`, `_F02`; transaction `ZSD_EPACK` |
 
-Workbench request: everything above. Customizing request: `TVARVC`
-entry (or maintain it directly in each client), roles.
+Workbench request: everything above. Customizing: `TVARVC` entry, roles.

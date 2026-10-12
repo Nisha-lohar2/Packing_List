@@ -4,8 +4,9 @@ WRICEF 102-B "Export consolidated packing list" · Astral Limited / UDAY / SD
 
 This document covers the Excel-upload report. It reads the packing list Excel file,
 fetches header and line-item data exactly as described in the FS logic sheet,
-and produces **one Smart Form per packing list number**. It then saves the data
-to the Z tables and writes a log row per packing list.
+and produces **one Smart Form per packing list number**. At the end it writes the data
+of every packing list that was output to the log table `ZSD_EPACK_DATA` (one Z table,
+FS "Technical detail" layout, one row per line item, all invoice numbers in one field).
 
 Sources read for this design (all in the repository):
 
@@ -107,7 +108,7 @@ The sample sheet has 77 line items (= PDF 90000081) with totals 4074 articles,
 | Marks & Nos., Container No., No. of packages | B39–B41 | AC, AE, AF | `ZSD_MARK`, `ZSD_CONT`, `ZSD_NOPACK` |
 | Declaration | B61 | AH | `ZSD_PL_DECL` (logic says `ZSD_DECL`; the Technical-detail name is used) |
 | Description of goods (override) | — | AG | `ZSD_HSN_DESC` (Q05) |
-| Invoices of the PL | — | L | `ZSD_EPACK_INV-VBELN` |
+| Invoices of the PL | — | L | `VBRK_VBELN` (STRING, all invoices of the PL comma-separated, e.g. "1000000348, 1000000349, 1000000350") |
 | Stored but not printed | — | AI, AJ, AK | `ZSD_ADV_AMT`, `ZSD_CMMT`, `ZSD_INV_DECL` (commercial-invoice fields) |
 
 ### 2.3 Line items
@@ -167,9 +168,9 @@ Each implemented assumption has an id (`Axx`) in the code. `docs/Development_Ass
 | Q12 | Total Articles | B52 reads `ZSD_TART`, but the template has no column. Is calculating Σ Articles correct? | Calculated (A08) | — |
 | Q13 | Weight check level | FS: GW ≥ NW. Per package group, or per line? (Weights are given per merged group.) | Per weight group, at upload and at output (A07) | Rule granularity |
 | Q14 | Authorization | FS §2.3 is empty. Approve object `ZSD_EPACK` (ACTVT 01/04, BUKRS) + `V_VBRK_VKO`? | As stated (A24) | Roles |
-| Q15 | When to save | Save the uploaded data after **preview** as well, or only after print / PDF? | After any successful output, incl. preview. Never in "Validate only" (A39) | One condition |
-| Q16 | "Z table created for log" | Is the log the FS Z table itself (`ZSD_EPACK_DATA` + header + invoice tables), a separate run log, or both? | **Both**: data → `ZSD_EPACK_HDR/INV/DATA`, run log → `ZSD_EPACK_LOG` (A40) | Drop one table |
-| Q17 | Re-upload | Uploading an existing PL replaces it and increases the revision. Is history needed? | Replace, revision + 1 (A22) | Versioning table |
+| Q15 | When to write the log | Write `ZSD_EPACK_DATA` after **preview** as well, or only after print / PDF? | After any successful output, incl. preview. Never in "Validate only" (A39) | One condition |
+| Q16 | Log table | **Decided**: one table `ZSD_EPACK_DATA` as in the FS, invoices as one STRING (A40) | — | — |
+| Q17 | Re-upload | Uploading a PL that is already in the log replaces its rows. Is history needed? | Replace (A22) | Key / history |
 | Q18 | Package type | Sample 90000014 shows "Loose Pipes / Boxes" subtotals. Is the new optional column AL acceptable? | Yes (A09) | Template |
 | Q19 | Field lengths | Notify parties, containers and declaration texts in the samples exceed the FS lengths. Approve longer fields? | Yes (A19) | DDIC |
 | Q20 | Layout | Are the two sample PDFs the approved layout? Is crossing out with a graphic acceptable? | Yes (A26–A28) | Form |
@@ -183,7 +184,7 @@ Each implemented assumption has an id (`Axx`) in the code. `docs/Development_Ass
 
 ```
  ZSD_EPACK selection screen
-   (•) Upload Excel file  ( ) Saved packing lists (reprint by invoice / PL no.)
+   Excel file (.xlsx)
    format: automatic / with NP / without NP   output: preview / print / PDF folder
    [ ] Validate only
           │
@@ -214,10 +215,11 @@ Each implemented assumption has an id (`Axx`) in the code. `docs/Development_Ass
      IS_HEADER / IT_TEXT / IT_ITEM of THIS PL only → preview / spool / PDF file
      error → logged on this PL, loop continues
           │
- 4  FORM save_packing_lists / write_log / finish_db  (skipped in "Validate only")
-   SAVE_PACKING_LISTS: PLs with output = X → ZSD_EPACK_HDR / _INV / _DATA
-     (lock, revision, array DELETE + INSERT, rollback on DB error)
-   WRITE_LOG: one ZSD_EPACK_LOG row per PL + one for file-level errors
+ 4  FORM save_packing_lists / finish_db  (skipped in "Validate only")
+   SAVE_PACKING_LISTS: PLs with output = X → ZSD_EPACK_DATA
+     one row per line item; header fields repeated on every row;
+     VBRK_VBELN = all invoices of the PL, comma-separated (STRING)
+     (authority 01, lock, array DELETE of the PL + INSERT, rollback on DB error)
    FINISH: COMMIT WORK, release locks
           │
    Result list (ALV): per PL status, form, invoices, items, output, saved, messages
@@ -230,9 +232,9 @@ time. Billing items are collected per PL only from that PL's invoices.
 
 **Performance.** The Excel is parsed once, with no DB access. Data retrieval is **19 SELECTs per run**
 (14 in `READ_SAP_DATA`, 5 in `READ_ADDRESSES`), independent of the number of packing lists, invoices
-or items. Add one read of existing headers before saving and one read of the default printer.
+or items. Add one read of the default printer.
 There is no SELECT in a loop.
-Lookups use hashed / sorted keys. The writes are 2 DELETE, 1 MODIFY, 2 INSERT and 1 INSERT (log), all
+Lookups use hashed / sorted keys. The writes are 1 DELETE and 1 INSERT on `ZSD_EPACK_DATA`, both
 array operations. AUTHORITY-CHECK results are buffered per value.
 
 ---
@@ -244,9 +246,9 @@ marked **(Qxx)** depend on the answer to that question.
 
 | # | Scenario | Test data | Expected result | Type |
 |---|---|---|---|---|
-| T01 | One invoice, one PL | 1 PL, 1 invoice, 2 lines | 1 PL with 1 invoice, 2 items; 1 form; saved; log status S | MT + IT |
+| T01 | One invoice, one PL | 1 PL, 1 invoice, 2 lines | 1 PL with 1 invoice, 2 items; 1 form; 2 rows in `ZSD_EPACK_DATA` | MT + IT |
 | T02 | Several invoices, same PL | invoices in one cell "A, B" and in another row | 3 invoices on the PL; header from SAP identical for all; 1 form | MT + IT |
-| T03 | Several PLs in one file | PL 90000014 rows + PL 90000081 rows | 2 results, **2 separate forms** (2 previews / 2 spool requests / 2 PDF files), 2 log rows | MT + IT |
+| T03 | Several PLs in one file | PL 90000014 rows + PL 90000081 rows | 2 results, **2 separate forms** (2 previews / 2 spool requests / 2 PDF files), rows of both PLs in `ZSD_EPACK_DATA` | MT + IT |
 | T04 | Items belong to their own PL only | parts PART-A* under PL A, PART-B* under PL B | form A shows only PART-A*, form B only PART-B* | MT + IT |
 | T05 | Several line items / merged groups | full `Example_90000081` sheet (77 lines) | 77 rows; Articles / weights on the first line of each group; totals 4074 / 12146 / 116323.800 / 115386.780; text "(Total 4074 Bundles)" | MT + IT, compare with PDF 90000081 |
 | T06 | Two package types, two HSN | Tarmac data (sample 90000014) | headings "PP LOW NOISE PIPES … 3917 2390", "… FITTINGS … 3917 4000"; "2342 <=Loose Pipes", "1073 <=Boxes"; "(Total 2342 Loose Pipes + 1073 Boxes = 3415 Packages)" | MT + IT |
@@ -258,7 +260,7 @@ marked **(Qxx)** depend on the answer to that question.
 | T12 | Missing invoice / PL date | empty L or N | error 017 | MT |
 | T13 | PL without line items | header row only | error 036, no form; other PL printed | MT + IT |
 | T14 | Rows above the first PL no. | data row before column M is filled | file-level error 055; the rows are ignored | MT |
-| T15 | No PL number at all | column M empty | error 059, nothing printed, log row | MT + IT |
+| T15 | No PL number at all | column M empty | error 059, nothing printed, nothing written | MT + IT |
 | T16 | Wrong / empty file | other layout; heading only | error 016 / 036 | MT |
 | T17 | Header conflict inside a PL | POL differs between rows of a PL | error 020; different POL in **different** PLs is fine | MT |
 | T18 | Duplicate rows | identical row twice / same Sl.No. with other values | warning 057, counted once / error 021 **(Q03)** | MT |
@@ -272,10 +274,9 @@ marked **(Qxx)** depend on the answer to that question.
 | T26 | Form missing / form error | deactivate one form | error 040 / 039 logged for that PL; the loop continues with the next PL | IT |
 | T27 | Preview cancelled | cancel in the preview dialog | warning 064, status W, not saved | IT |
 | T28 | PDF per PL | PDF + folder, 2 PLs | `PackingList_90000014.pdf`, `PackingList_90000081.pdf` | IT |
-| T29 | Save and log | after T03 | `ZSD_EPACK_HDR` 2 rows (revision 0), `_INV` / `_DATA` complete as uploaded; `ZSD_EPACK_LOG` 2 rows (S) with invoices, counts, form | IT |
-| T30 | Re-upload | T03 file again | revision 1, data replaced, new log rows **(Q17)** | IT |
-| T31 | Validate only | any file | result list, no form, no DB change, no log | IT |
-| T32 | Reprint saved | option "Saved packing lists" by invoice | PL found through its invoice, printed with all its invoices (info 006), print stamp set for print / PDF | IT |
+| T29 | Log table | after T03 | `ZSD_EPACK_DATA`: one row per line item of each PL; header fields on every row; `VBRK_VBELN` holds all invoices of the PL in one string ("A, B, C"); `ZSD_TART` = Σ Articles; message 032 | IT |
+| T30 | Re-upload | T03 file again | rows of both PLs replaced, no duplicates **(Q17)** | IT |
+| T31 | Validate only | any file | result list, no form, no DB change | IT |
 | T33 | Authorization | user without `ZSD_EPACK` 04 / `V_VBRK_VKO` / 01 | error 012, no form / form printed but not saved (warning 012) **(Q14)** | IT |
 | T34 | Volume | 20 PLs × 100 lines, 100 invoices | runtime dominated by form output; SQL trace shows 19 data SELECTs | IT (ST05) |
 | T36 | Business sample file | `test_data/Sample_data_ABAP.xlsx` | 1 PL (90000088), 3 invoices, 9 items, 3 packages; totals 120 / 884 / 1527.000 / 1423.000; with-NP form; 7 warnings 029 — see `test_data/Sample_data_ABAP_Expected_Results.md` | MT + IT |
@@ -288,11 +289,12 @@ marked **(Qxx)** depend on the answer to that question.
 
 | Object | Type | Status in this delivery |
 |---|---|---|
-| `ZSD_EPACK_PRINT` (T-code `ZSD_EPACK`) | Report | **Procedural**: Excel upload → one form per PL → save + log |
+| `ZSD_EPACK_PRINT` (T-code `ZSD_EPACK`) | Report | **Procedural**: Excel upload → one form per PL → log table |
 | `ZSD_EPACK_PRINT_TOP` / `_SEL` / `_F01` / `_F02` | Includes | Types and data / selection screen / main FORMs / helper FORMs |
 | `ZCL_SD_EPACK_*`, `ZIF_SD_EPACK`, `ZCX_SD_EPACK` | Classes, interface | **Withdrawn**: replaced by the includes (same behaviour) |
-| `ZSD_EPACK_LOG`, `ZSD_EPACK_STATUS` | Table, data element | **New** |
-| `ZSD_EPACK_HDR`, `ZSD_EPACK_INV`, `ZSD_EPACK_DATA`, structures, lock object | DDIC | Unchanged design |
+| `ZSD_EPACK_DATA` | Table | **The only Z table** (log): FS Technical-detail layout, `VBRK_VBELN` as STRING with all invoices of the PL |
+| `ZSD_EPACK_HDR`, `ZSD_EPACK_INV`, `ZSD_EPACK_LOG` | Tables | **Withdrawn** (one log table only) |
+| Form structures, lock object `EZSD_EPACK` | DDIC | Lock object now on `ZSD_EPACK_DATA` |
 | Message class `ZSD_EPACK` | Messages | 055–067 new, 004 / 006 / 011 / 042 reworded, upload-only messages withdrawn |
 | `ZSD_EPACK_UPLOAD` / T-code `ZSD_EPACK_UPL` | Report | **Withdrawn**, replaced by `ZSD_EPACK` |
 | `ZSD_EPACK_WITH_NP`, `ZSD_EPACK_WITHOUT_NP`, style, graphic | Smart Forms | Specification updated (one call per PL, Logic-sheet block content) |

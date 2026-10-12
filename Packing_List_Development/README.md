@@ -13,11 +13,11 @@ annexures stay in the repository root, unchanged:
 | `docs/Development_Assumptions.md` | Every assumption applied (`Axx` in the code) |
 | `docs/Packing_List_Requirement_Analysis_and_Development_Approach.md` | Full requirement analysis of the FS, with 43 clarifications |
 | `docs/ZSD_EPACK_SmartForm_Specification.md` | Build instructions for the two Smart Forms, the style and the graphic |
-| `src/DDIC_and_Repository_Objects.md` | Tables (incl. log table `ZSD_EPACK_LOG`), structures, lock object, message class, authorization object, transaction |
+| `src/DDIC_and_Repository_Objects.md` | Log table `ZSD_EPACK_DATA` (the only Z table, FS layout, all invoices in one STRING field), form structures, lock object, message class, authorization object, transaction |
 | `src/ZSD_EPACK_PRINT.prog.abap` | Report behind transaction `ZSD_EPACK` (procedural, no custom classes) |
 | `src/ZSD_EPACK_PRINT_TOP.prog.abap` | Include: types, constants, global data |
 | `src/ZSD_EPACK_PRINT_SEL.prog.abap` | Include: selection screen and its events |
-| `src/ZSD_EPACK_PRINT_F01.prog.abap` | Include: main routines — Excel upload and split by packing list, Logic-sheet data retrieval (bulk), one form per packing list, save, log, result list |
+| `src/ZSD_EPACK_PRINT_F01.prog.abap` | Include: main routines — Excel upload and split by packing list, Logic-sheet data retrieval (bulk), one form per packing list, write to log table `ZSD_EPACK_DATA`, result list |
 | `src/ZSD_EPACK_PRINT_F02.prog.abap` | Include: helper routines — package groups, FS weight rule, totals, printed rows, formatting, parsing |
 | `templates/ZSD_EPACK_Upload_Template_v2.xlsx` | Upload template with instructions and a worked example (sample 90000081) |
 | `test_data/Sample_data_ABAP.xlsx` | Business sample upload file (packing list 90000088) |

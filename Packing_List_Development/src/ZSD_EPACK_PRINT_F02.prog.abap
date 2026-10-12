@@ -121,12 +121,12 @@ FORM build_items USING    iv_packno   TYPE zsd_packno
                  CHANGING ct_items    TYPE ty_item_tab
                           ct_messages TYPE bapiret2_t.
 
-  DATA lv_art_grp  TYPE zsd_art_grp.
-  DATA lv_wt_grp   TYPE zsd_wt_grp.
-  DATA lv_pkg_type TYPE zsd_pkg_type.
+  DATA lv_art_grp  TYPE i.
+  DATA lv_wt_grp   TYPE i.
+  DATA lv_pkg_type TYPE char20.
   DATA lv_prev_sn  TYPE zsd_sn.
   DATA lt_seen_sn  TYPE SORTED TABLE OF zsd_sn WITH UNIQUE KEY table_line.
-  DATA ls_item     TYPE zsd_epack_data.
+  DATA ls_item     TYPE ty_item.
 
   CLEAR ct_items.
 
@@ -177,14 +177,12 @@ FORM build_items USING    iv_packno   TYPE zsd_packno
     ls_item-zsd_partno   = ls_line-partno.
     ls_item-zsd_matdesc  = ls_line-matdesc.
     ls_item-zsd_qty      = ls_line-qty.
-    ls_item-zsd_qty_uom  = gc_uom_qty.
     IF ls_line-gwt_filled = abap_true.
       ls_item-zsd_gwt    = ls_line-gwt.
     ENDIF.
     IF ls_line-nwt_filled = abap_true.
       ls_item-zsd_nwt    = ls_line-nwt.
     ENDIF.
-    ls_item-zsd_wt_uom   = gc_uom_weight.
     ls_item-zsd_hsn      = ls_line-hsn.
     APPEND ls_item TO ct_items.
 
@@ -200,7 +198,7 @@ ENDFORM.
 FORM check_weights USING    it_items    TYPE ty_item_tab
                    CHANGING ct_messages TYPE bapiret2_t.
 
-  DATA lv_prev_grp TYPE zsd_wt_grp.
+  DATA lv_prev_grp TYPE i.
   DATA lt_detail   TYPE bapiret2_t.
   DATA lv_gross    TYPE string.
   DATA lv_net      TYPE string.
@@ -236,7 +234,7 @@ FORM check_quantities USING    it_items    TYPE ty_item_tab
                       CHANGING ct_messages TYPE bapiret2_t.
 
   DATA lv_articles TYPE zsd_art.
-  DATA lv_prev_grp TYPE zsd_art_grp.
+  DATA lv_prev_grp TYPE i.
   DATA lv_expected TYPE zsd_qty.
   DATA lv_qty      TYPE string.
   DATA lv_sn       TYPE i.
@@ -330,9 +328,9 @@ FORM build_print_items USING    it_items    TYPE ty_item_tab
                        CHANGING ct_print    TYPE zsd_tt_epack_prt_itm.
 
   DATA lv_prev_hsn  TYPE zsd_hsn VALUE '#'.
-  DATA lv_prev_art  TYPE zsd_art_grp.
-  DATA lv_prev_wt   TYPE zsd_wt_grp.
-  DATA lv_run_type  TYPE zsd_pkg_type.
+  DATA lv_prev_art  TYPE i.
+  DATA lv_prev_wt   TYPE i.
+  DATA lv_run_type  TYPE char20.
   DATA lv_run_sum   TYPE i.
   DATA lv_subtotals TYPE abap_bool.
   DATA ls_totals    TYPE ty_totals.

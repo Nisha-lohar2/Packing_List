@@ -5,7 +5,7 @@
 *&   1. Excel upload -> packing lists        (FORM parse_*, map_*)
 *&   2. SAP data per FS logic sheet, bulk     (FORM read_sap_data, build_one)
 *&   3. One Smart Form per packing list       (FORM output_forms)
-*&   4. Save to Z tables + log                (FORM save_*, write_log)
+*&   4. Save to Z table ZSD_EPACK_DATA (log) (FORM save_packing_lists)
 *&
 *& PERFORMANCE: READ_SAP_DATA reads every SAP table ONCE for the invoices
 *& of ALL packing lists (FOR ALL ENTRIES on de-duplicated keys). Each
@@ -28,7 +28,7 @@ FORM main.
 
   DATA lv_ok TYPE abap_bool.
 
-  " Step 1 - packing lists from the Excel file or from the Z tables
+  " Step 1 - packing lists from the Excel file
   PERFORM collect_packing_lists CHANGING lv_ok.
 
   IF lv_ok = abap_true.
@@ -42,11 +42,10 @@ FORM main.
     ENDIF.
   ENDIF.
 
-  " Step 4 - save + log (not in "Validate only"), then the result list
+  " Step 4 - write the data to the log table ZSD_EPACK_DATA (not in
+  " "Validate only"), then the result list
   IF p_check = abap_false.
     PERFORM save_packing_lists.
-    PERFORM stamp_reprint.
-    PERFORM write_log.
     PERFORM finish_db.
   ENDIF.
 
@@ -56,7 +55,7 @@ FORM main.
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Step 1: packing lists from the Excel file or from saved data
+*& Step 1: packing lists from the Excel file
 *&---------------------------------------------------------------------*
 FORM collect_packing_lists CHANGING cv_ok TYPE abap_bool.
 
@@ -66,23 +65,19 @@ FORM collect_packing_lists CHANGING cv_ok TYPE abap_bool.
 
   cv_ok = abap_false.
 
-  IF p_xls = abap_true.
-    PERFORM read_file USING p_file CHANGING lv_xstring gt_file_messages.
-    PERFORM has_errors USING gt_file_messages CHANGING lv_errors.
-    IF lv_errors = abap_true.
-      RETURN.
-    ENDIF.
-
-    PERFORM read_worksheet USING lv_xstring p_file CHANGING lt_rows gt_file_messages.
-    PERFORM has_errors USING gt_file_messages CHANGING lv_errors.
-    IF lv_errors = abap_true.
-      RETURN.
-    ENDIF.
-
-    PERFORM parse_rows USING lt_rows p_file CHANGING gt_packing_lists gt_file_messages.
-  ELSE.
-    PERFORM load_saved USING s_vbeln[] s_packno[] CHANGING gt_packing_lists gt_file_messages.
+  PERFORM read_file USING p_file CHANGING lv_xstring gt_file_messages.
+  PERFORM has_errors USING gt_file_messages CHANGING lv_errors.
+  IF lv_errors = abap_true.
+    RETURN.
   ENDIF.
+
+  PERFORM read_worksheet USING lv_xstring p_file CHANGING lt_rows gt_file_messages.
+  PERFORM has_errors USING gt_file_messages CHANGING lv_errors.
+  IF lv_errors = abap_true.
+    RETURN.
+  ENDIF.
+
+  PERFORM parse_rows USING lt_rows p_file CHANGING gt_packing_lists gt_file_messages.
 
   cv_ok = xsdbool( gt_packing_lists IS NOT INITIAL ).
 
@@ -231,7 +226,6 @@ FORM parse_rows USING    it_rows          TYPE ty_row_tab
     CLEAR ls_pl.
     ls_pl-packno              = ls_split-packno.
     ls_pl-header-zsd_packno   = ls_split-packno.
-    ls_pl-header-zsd_filename = iv_filename.
     ls_pl-rows = |{ ls_split-rows[ 1 ]-row }-{ ls_split-rows[ lines( ls_split-rows ) ]-row }|.
 
     PERFORM map_header USING ls_split-rows CHANGING ls_pl.
@@ -702,102 +696,6 @@ FORM map_lines USING    it_rows TYPE ty_row_tab
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Saved packing lists (reprint) for invoices and/or numbers. A packing
-*& list found through one invoice is returned with all its invoices.
-*&---------------------------------------------------------------------*
-FORM load_saved USING    it_vbeln         TYPE ty_vbeln_range
-                         it_packno        TYPE ty_packno_range
-                CHANGING ct_packing_lists TYPE ty_packing_list_tab
-                         ct_messages      TYPE bapiret2_t.
-
-  DATA lt_packno TYPE SORTED TABLE OF zsd_packno WITH UNIQUE KEY table_line.
-  DATA lt_hdr    TYPE STANDARD TABLE OF zsd_epack_hdr  WITH EMPTY KEY.
-  DATA lt_inv    TYPE STANDARD TABLE OF zsd_epack_inv  WITH EMPTY KEY.
-  DATA lt_item   TYPE STANDARD TABLE OF zsd_epack_data WITH EMPTY KEY.
-  DATA lt_link   TYPE STANDARD TABLE OF zsd_epack_inv  WITH EMPTY KEY.
-  DATA ls_pl     TYPE ty_packing_list.
-  DATA lv_ext    TYPE string.
-
-  CLEAR ct_packing_lists.
-
-  " An empty range would select everything - never allowed here
-  IF it_vbeln IS INITIAL AND it_packno IS INITIAL.
-    PERFORM add_msg USING 'E' '003' space space space space CHANGING ct_messages.
-    RETURN.
-  ENDIF.
-
-  IF it_vbeln IS NOT INITIAL.
-    SELECT * FROM zsd_epack_inv
-      WHERE vbeln IN @it_vbeln
-      INTO TABLE @lt_link.
-    LOOP AT lt_link INTO DATA(ls_link).
-      INSERT ls_link-zsd_packno INTO TABLE lt_packno.
-    ENDLOOP.
-    " Invoices entered one by one must belong to a packing list
-    LOOP AT it_vbeln INTO DATA(ls_sel) WHERE sign = 'I' AND option = 'EQ'.
-      READ TABLE lt_link TRANSPORTING NO FIELDS WITH KEY vbeln = ls_sel-low.
-      IF sy-subrc <> 0.
-        lv_ext = |{ ls_sel-low ALPHA = OUT }|.
-        PERFORM add_msg USING 'E' '004' lv_ext space space space CHANGING ct_messages.
-      ENDIF.
-    ENDLOOP.
-  ENDIF.
-
-  IF it_packno IS NOT INITIAL.
-    SELECT zsd_packno FROM zsd_epack_hdr
-      WHERE zsd_packno IN @it_packno
-      INTO TABLE @DATA(lt_hdr_key).
-    LOOP AT lt_hdr_key INTO DATA(ls_hdr_key).
-      INSERT ls_hdr_key-zsd_packno INTO TABLE lt_packno.
-    ENDLOOP.
-  ENDIF.
-
-  IF lt_packno IS INITIAL.
-    PERFORM add_msg USING 'E' '046' space space space space CHANGING ct_messages.
-    RETURN.
-  ENDIF.
-
-  SELECT * FROM zsd_epack_hdr
-    FOR ALL ENTRIES IN @lt_packno
-    WHERE zsd_packno = @lt_packno-table_line
-    INTO TABLE @lt_hdr.
-
-  SELECT * FROM zsd_epack_inv
-    FOR ALL ENTRIES IN @lt_packno
-    WHERE zsd_packno = @lt_packno-table_line
-    INTO TABLE @lt_inv.
-
-  SELECT * FROM zsd_epack_data
-    FOR ALL ENTRIES IN @lt_packno
-    WHERE zsd_packno = @lt_packno-table_line
-    INTO TABLE @lt_item.
-
-  SORT lt_inv  BY zsd_packno vbeln.
-  SORT lt_item BY zsd_packno zsd_sn.
-
-  LOOP AT lt_hdr INTO DATA(ls_hdr).
-    CLEAR ls_pl.
-    ls_pl-packno = ls_hdr-zsd_packno.
-    ls_pl-header = ls_hdr.
-    LOOP AT lt_inv INTO DATA(ls_inv) WHERE zsd_packno = ls_hdr-zsd_packno.
-      INSERT ls_inv-vbeln INTO TABLE ls_pl-invoices.
-      IF it_vbeln IS NOT INITIAL AND ls_inv-vbeln NOT IN it_vbeln.
-        lv_ext = |{ ls_inv-vbeln ALPHA = OUT }|.
-        PERFORM add_msg USING 'I' '006' ls_hdr-zsd_packno lv_ext space space CHANGING ls_pl-messages.
-      ENDIF.
-    ENDLOOP.
-    LOOP AT lt_item INTO DATA(ls_item) WHERE zsd_packno = ls_hdr-zsd_packno.
-      APPEND ls_item TO ls_pl-items.
-    ENDLOOP.
-    IF ls_pl-invoices IS INITIAL OR ls_pl-items IS INITIAL.
-      PERFORM add_msg USING 'E' '047' ls_hdr-zsd_packno space space space CHANGING ls_pl-messages.
-    ENDIF.
-    INSERT ls_pl INTO TABLE ct_packing_lists.
-  ENDLOOP.
-
-ENDFORM.
-
-*&---------------------------------------------------------------------*
 *& Step 2a: read all SAP tables ONCE for the invoices of all packing lists
 *&---------------------------------------------------------------------*
 FORM read_sap_data USING it_packing_lists TYPE ty_packing_list_tab.
@@ -1197,7 +1095,6 @@ FORM build_one USING    is_pl     TYPE ty_packing_list
   ls_header-packno = is_pl-header-zsd_packno.
   PERFORM format_date USING is_pl-header-zsd_packdt CHANGING lv_text.
   ls_header-packdt_txt = lv_text.
-  ls_header-revno      = is_pl-header-zsd_revno.
   ls_header-gstin      = ls_branch-gstin.                 " logic B6
   ls_header-cin        = ls_t001z-paval.                  " logic B7
   ls_header-cnty_orgn  = is_pl-header-zsd_cnty_orgn.      " logic B16
@@ -1492,7 +1389,7 @@ ENDFORM.
 *& FS 1.1: format with notify party when notify parties are maintained
 *& (A05). A manual "without" while notify parties exist is an error.
 *&---------------------------------------------------------------------*
-FORM determine_form USING    is_header   TYPE zsd_epack_hdr
+FORM determine_form USING    is_header   TYPE ty_header
                              iv_format   TYPE char1
                     CHANGING cv_form     TYPE tdsfname
                              cv_np_count TYPE i
@@ -2078,23 +1975,20 @@ FORM pdf_path USING    iv_packno TYPE zsd_packno
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Step 4a: save every packing list whose form was produced (Excel source
-*& only) to ZSD_EPACK_HDR / _INV / _DATA. An existing packing list is
-*& replaced and gets the next revision (A22). Array operations only.
+*& Step 4: write every packing list whose form was produced to the log
+*& table ZSD_EPACK_DATA - FS "Technical detail" layout: one row per line
+*& item, the header fields repeated on every row, all invoice numbers of
+*& the packing list in one text field VBRK_VBELN ("1000000348, ...").
+*& A packing list uploaded again replaces its earlier rows.
 *&---------------------------------------------------------------------*
 FORM save_packing_lists.
 
-  DATA lr_packno  TYPE ty_packno_range.
-  DATA lt_hdr     TYPE STANDARD TABLE OF zsd_epack_hdr  WITH EMPTY KEY.
-  DATA lt_inv     TYPE STANDARD TABLE OF zsd_epack_inv  WITH EMPTY KEY.
-  DATA lt_item    TYPE STANDARD TABLE OF zsd_epack_data WITH EMPTY KEY.
-  DATA ls_hdr     TYPE zsd_epack_hdr.
-  DATA lv_ok      TYPE abap_bool.
-  DATA lv_printed TYPE abap_bool.
-
-  IF p_xls = abap_false.
-    RETURN.
-  ENDIF.
+  DATA lr_packno TYPE ty_packno_range.
+  DATA lt_data   TYPE STANDARD TABLE OF zsd_epack_data WITH EMPTY KEY.
+  DATA ls_data   TYPE zsd_epack_data.
+  DATA lt_inv    TYPE ty_text_tab.
+  DATA ls_totals TYPE ty_totals.
+  DATA lv_ok     TYPE abap_bool.
 
   " Which packing lists may be saved
   LOOP AT gt_result ASSIGNING FIELD-SYMBOL(<ls_result>) WHERE output = abap_true.
@@ -2111,13 +2005,13 @@ FORM save_packing_lists.
     " Lock against a parallel run for the same packing list
     CALL FUNCTION 'ENQUEUE_EZSD_EPACK'
       EXPORTING
-        mode_zsd_epack_hdr = 'E'
-        mandt              = sy-mandt
-        zsd_packno         = <ls_result>-packno
+        mode_zsd_epack_data = 'E'
+        mandt               = sy-mandt
+        zsd_packno          = <ls_result>-packno
       EXCEPTIONS
-        foreign_lock       = 1
-        system_failure     = 2
-        OTHERS             = 3.
+        foreign_lock        = 1
+        system_failure      = 2
+        OTHERS              = 3.
     IF sy-subrc <> 0.
       PERFORM add_msg USING 'W' '014' <ls_result>-packno sy-msgv1 space space CHANGING <ls_result>-messages.
       CONTINUE.
@@ -2131,76 +2025,56 @@ FORM save_packing_lists.
     RETURN.
   ENDIF.
 
-  " Revision and creation data of packing lists saved before
-  SELECT zsd_packno, zsd_revno, zsd_ernam, zsd_erdat, zsd_erzet
-    FROM zsd_epack_hdr
-    WHERE zsd_packno IN @lr_packno
-    INTO TABLE @DATA(lt_existing).
-  SORT lt_existing BY zsd_packno.
-
-  lv_printed = xsdbool( p_print = abap_true OR p_pdf = abap_true ).
-
   LOOP AT lr_packno INTO DATA(ls_packno).
     READ TABLE gt_packing_lists INTO DATA(ls_pl) WITH TABLE KEY packno = ls_packno-low.
-    READ TABLE gt_result INTO DATA(ls_res) WITH TABLE KEY packno = ls_packno-low.
-
-    ls_hdr = ls_pl-header.
-    ls_hdr-zsd_bukrs    = ls_res-bukrs.
-    ls_hdr-zsd_filename = p_file.
-
-    READ TABLE lt_existing INTO DATA(ls_old) WITH KEY zsd_packno = ls_packno-low BINARY SEARCH.
-    IF sy-subrc = 0.
-      ls_hdr-zsd_revno = ls_old-zsd_revno + 1.
-      ls_hdr-zsd_ernam = ls_old-zsd_ernam.
-      ls_hdr-zsd_erdat = ls_old-zsd_erdat.
-      ls_hdr-zsd_erzet = ls_old-zsd_erzet.
-      ls_hdr-zsd_aenam = sy-uname.
-      ls_hdr-zsd_aedat = sy-datum.
-      ls_hdr-zsd_aezet = sy-uzeit.
-    ELSE.
-      ls_hdr-zsd_revno = 0.
-      ls_hdr-zsd_ernam = sy-uname.
-      ls_hdr-zsd_erdat = sy-datum.
-      ls_hdr-zsd_erzet = sy-uzeit.
+    IF sy-subrc <> 0.
+      CONTINUE.
     ENDIF.
-    IF lv_printed = abap_true.
-      ls_hdr-zsd_prnam = sy-uname.
-      ls_hdr-zsd_prdat = sy-datum.
-      ls_hdr-zsd_przet = sy-uzeit.
-    ENDIF.
-    APPEND ls_hdr TO lt_hdr.
 
+    " All invoice numbers in one field
+    CLEAR lt_inv.
     LOOP AT ls_pl-invoices INTO DATA(lv_vbeln).
-      APPEND VALUE #( zsd_packno = ls_packno-low vbeln = lv_vbeln ) TO lt_inv.
+      APPEND |{ lv_vbeln ALPHA = OUT }| TO lt_inv.
     ENDLOOP.
 
-    " Line items exactly as uploaded (not the material-master defaults)
-    APPEND LINES OF ls_pl-items TO lt_item.
+    " Total Articles (logic B52) - calculated, the template has no column
+    PERFORM calc_totals USING ls_pl-items CHANGING ls_totals.
+
+    " Header fields of the packing list (same on every row)
+    CLEAR ls_data.
+    MOVE-CORRESPONDING ls_pl-header TO ls_data.
+    ls_data-vbrk_vbeln = concat_lines_of( table = lt_inv sep = `, ` ).
+    ls_data-zsd_tart   = ls_totals-articles.
+    ls_data-zsd_meins  = gc_uom_qty.
+    ls_data-zsd_gewei  = gc_uom_weight.
+
+    " One row per line item, exactly as uploaded
+    LOOP AT ls_pl-items INTO DATA(ls_item).
+      ls_data-zsd_sn      = ls_item-zsd_sn.
+      ls_data-zsd_inv_sn  = ls_item-zsd_inv_sn.
+      ls_data-zsd_artno   = ls_item-zsd_artno.
+      ls_data-zsd_std     = ls_item-zsd_std.
+      ls_data-zsd_art     = ls_item-zsd_art.
+      ls_data-zsd_partno  = ls_item-zsd_partno.
+      ls_data-zsd_matdesc = ls_item-zsd_matdesc.
+      ls_data-zsd_qty     = ls_item-zsd_qty.
+      ls_data-zsd_gwt     = ls_item-zsd_gwt.
+      ls_data-zsd_nwt     = ls_item-zsd_nwt.
+      ls_data-zsd_hsn     = ls_item-zsd_hsn.
+      APPEND ls_data TO lt_data.
+    ENDLOOP.
   ENDLOOP.
 
-  " Replace old versions, write new ones
+  " Replace earlier rows of these packing lists, write the new ones
   DELETE FROM zsd_epack_data WHERE zsd_packno IN @lr_packno.
-  DELETE FROM zsd_epack_inv  WHERE zsd_packno IN @lr_packno.
-
-  MODIFY zsd_epack_hdr FROM TABLE @lt_hdr.
+  INSERT zsd_epack_data FROM TABLE @lt_data.
   lv_ok = xsdbool( sy-subrc = 0 ).
-
-  INSERT zsd_epack_inv FROM TABLE @lt_inv.
-  IF sy-subrc <> 0.
-    lv_ok = abap_false.
-  ENDIF.
-
-  INSERT zsd_epack_data FROM TABLE @lt_item.
-  IF sy-subrc <> 0.
-    lv_ok = abap_false.
-  ENDIF.
 
   LOOP AT lr_packno INTO ls_packno.
     READ TABLE gt_result ASSIGNING <ls_result> WITH TABLE KEY packno = ls_packno-low.
     IF lv_ok = abap_true.
       <ls_result>-saved = abap_true.
-      READ TABLE lt_hdr INTO ls_hdr WITH KEY zsd_packno = ls_packno-low.
-      PERFORM add_msg USING 'S' '032' ls_packno-low ls_hdr-zsd_revno <ls_result>-item_count <ls_result>-inv_count
+      PERFORM add_msg USING 'S' '032' ls_packno-low <ls_result>-item_count <ls_result>-inv_count space
                       CHANGING <ls_result>-messages.
     ELSE.
       PERFORM add_msg USING 'E' '052' ls_packno-low space space space CHANGING <ls_result>-messages.
@@ -2208,135 +2082,14 @@ FORM save_packing_lists.
   ENDLOOP.
 
   IF lv_ok = abap_false.
-    " Nothing half-written: undo all data changes of this run
+    " Nothing half-written: undo the delete as well
     ROLLBACK WORK.
   ENDIF.
 
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Print stamp for reprinted packing lists (print / PDF only)
-*&---------------------------------------------------------------------*
-FORM stamp_reprint.
-
-  DATA lr_packno TYPE ty_packno_range.
-
-  IF p_saved = abap_false OR p_prev = abap_true.
-    RETURN.
-  ENDIF.
-
-  LOOP AT gt_result INTO DATA(ls_res) WHERE output = abap_true.
-    APPEND VALUE #( sign = 'I' option = 'EQ' low = ls_res-packno ) TO lr_packno.
-  ENDLOOP.
-  IF lr_packno IS INITIAL.
-    RETURN.
-  ENDIF.
-
-  UPDATE zsd_epack_hdr
-    SET zsd_prnam = @sy-uname,
-        zsd_prdat = @sy-datum,
-        zsd_przet = @sy-uzeit
-    WHERE zsd_packno IN @lr_packno.
-
-ENDFORM.
-
-*&---------------------------------------------------------------------*
-*& Step 4b: one ZSD_EPACK_LOG row per packing list + one for file-level
-*& messages (A40)
-*&---------------------------------------------------------------------*
-FORM write_log.
-
-  DATA lt_log    TYPE STANDARD TABLE OF zsd_epack_log WITH EMPTY KEY.
-  DATA ls_base   TYPE zsd_epack_log.
-  DATA ls_log    TYPE zsd_epack_log.
-  DATA ls_msg    TYPE bapiret2.
-  DATA lv_errors TYPE abap_bool.
-  DATA lt_inv    TYPE ty_text_tab.
-
-  TRY.
-      gv_runid = cl_system_uuid=>create_uuid_c32_static( ).
-    CATCH cx_uuid_error.
-      gv_runid = |{ sy-datum }{ sy-uzeit }{ sy-uname }|.
-  ENDTRY.
-
-  ls_base-runid    = gv_runid.
-  ls_base-source   = COND #( WHEN p_xls = abap_true THEN gc_src_excel ELSE gc_src_saved ).
-  ls_base-filename = p_file.
-  ls_base-output   = COND #( WHEN p_print = abap_true THEN gc_out_print
-                             WHEN p_pdf   = abap_true THEN gc_out_pdf
-                             ELSE gc_out_preview ).
-  ls_base-ernam    = sy-uname.
-  ls_base-erdat    = sy-datum.
-  ls_base-erzet    = sy-uzeit.
-
-  " File-level problems (wrong layout, rows without packing list number)
-  IF gt_file_messages IS NOT INITIAL.
-    PERFORM log_message USING gt_file_messages CHANGING ls_msg.
-    PERFORM has_errors USING gt_file_messages CHANGING lv_errors.
-    ls_log = ls_base.
-    ls_log-status   = COND #( WHEN lv_errors = abap_true THEN gc_st_error ELSE gc_st_warning ).
-    ls_log-msg_cnt  = lines( gt_file_messages ).
-    ls_log-msg_type = ls_msg-type.
-    ls_log-message  = ls_msg-message.
-    APPEND ls_log TO lt_log.
-  ENDIF.
-
-  LOOP AT gt_result INTO DATA(ls_result).
-    ls_log = ls_base.
-    PERFORM log_message USING ls_result-messages CHANGING ls_msg.
-
-    ls_log-zsd_packno  = ls_result-packno.
-    ls_log-formname    = ls_result-print-form.
-    ls_log-status      = ls_result-status.
-    ls_log-inv_cnt     = ls_result-inv_count.
-    ls_log-item_cnt    = ls_result-item_count.
-    ls_log-output_done = ls_result-output.
-    ls_log-saved       = ls_result-saved.
-    ls_log-msg_cnt     = lines( ls_result-messages ).
-    ls_log-msg_type    = ls_msg-type.
-    ls_log-message     = ls_msg-message.
-
-    READ TABLE gt_packing_lists INTO DATA(ls_pl) WITH TABLE KEY packno = ls_result-packno.
-    IF sy-subrc = 0.
-      CLEAR lt_inv.
-      LOOP AT ls_pl-invoices INTO DATA(lv_vbeln).
-        APPEND |{ lv_vbeln ALPHA = OUT }| TO lt_inv.
-      ENDLOOP.
-      ls_log-invoices = concat_lines_of( table = lt_inv sep = `, ` ).
-      ls_log-xls_rows = ls_pl-rows.
-    ENDIF.
-
-    APPEND ls_log TO lt_log.
-  ENDLOOP.
-
-  IF lt_log IS NOT INITIAL.
-    INSERT zsd_epack_log FROM TABLE @lt_log.
-    IF sy-subrc <> 0.
-      MESSAGE s062(zsd_epack) DISPLAY LIKE 'E'.
-    ENDIF.
-  ENDIF.
-
-ENDFORM.
-
-*&---------------------------------------------------------------------*
-*& Most important message: first error, else first warning, else last
-*&---------------------------------------------------------------------*
-FORM log_message USING    it_messages TYPE bapiret2_t
-                 CHANGING cs_message  TYPE bapiret2.
-
-  CLEAR cs_message.
-  LOOP AT it_messages INTO cs_message WHERE type CA 'EAX'.
-    RETURN.
-  ENDLOOP.
-  LOOP AT it_messages INTO cs_message WHERE type = 'W'.
-    RETURN.
-  ENDLOOP.
-  READ TABLE it_messages INTO cs_message INDEX lines( it_messages ).
-
-ENDFORM.
-
-*&---------------------------------------------------------------------*
-*& Step 4c: one COMMIT WORK for data and log, then release the locks
+*& One COMMIT WORK, then release the locks
 *&---------------------------------------------------------------------*
 FORM finish_db.
 
@@ -2345,9 +2098,9 @@ FORM finish_db.
   LOOP AT gt_locked INTO DATA(lv_packno).
     CALL FUNCTION 'DEQUEUE_EZSD_EPACK'
       EXPORTING
-        mode_zsd_epack_hdr = 'E'
-        mandt              = sy-mandt
-        zsd_packno         = lv_packno.
+        mode_zsd_epack_data = 'E'
+        mandt               = sy-mandt
+        zsd_packno          = lv_packno.
   ENDLOOP.
   CLEAR gt_locked.
 
@@ -2457,7 +2210,7 @@ FORM show_result.
       lo_alv->get_columns( )->get_column( 'SAVED' )->set_short_text( 'Saved' ).
       lo_alv->get_sorts( )->add_sort( columnname = 'PACKNO' ).
       lo_alv->get_display_settings( )->set_list_header(
-        CONV #( |Export Packing List - { lines( gt_result ) } packing list(s), run { gv_runid }| ) ).
+        CONV #( |Export Packing List - { lines( gt_result ) } packing list(s)| ) ).
       lo_alv->display( ).
     CATCH cx_salv_error INTO lx_salv.
       MESSAGE s063(zsd_epack) DISPLAY LIKE 'E'.

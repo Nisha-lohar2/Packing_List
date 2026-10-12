@@ -13,9 +13,9 @@ The requirement analysis with all 43 original clarifications is in
 | Report (T-code `ZSD_EPACK`) — procedural, no custom classes | `src/ZSD_EPACK_PRINT.prog.abap` | Code complete |
 | Include: types, constants, global data | `src/ZSD_EPACK_PRINT_TOP.prog.abap` | Code complete |
 | Include: selection screen | `src/ZSD_EPACK_PRINT_SEL.prog.abap` | Code complete |
-| Include: upload, data retrieval, forms, save, log | `src/ZSD_EPACK_PRINT_F01.prog.abap` | Code complete |
+| Include: upload, data retrieval, forms, log table | `src/ZSD_EPACK_PRINT_F01.prog.abap` | Code complete |
 | Include: package groups, weight rule, totals, formatting | `src/ZSD_EPACK_PRINT_F02.prog.abap` | Code complete |
-| DDIC incl. log table, messages, auth | `src/DDIC_and_Repository_Objects.md` | Specification |
+| DDIC (log table `ZSD_EPACK_DATA`), messages, auth | `src/DDIC_and_Repository_Objects.md` | Specification |
 | Smart Forms | `docs/ZSD_EPACK_SmartForm_Specification.md` | Build specification |
 | Design, mapping, test plan | `docs/Packing_List_Report_Design.md` | Done |
 | Upload template + example | `templates/ZSD_EPACK_Upload_Template_v2.xlsx` | Done |
@@ -46,7 +46,7 @@ example sheet: 77 lines, totals 4074 / 12146 / 116323.800 / 115386.780, matching
 | A19 | Multi-line text fields are longer than in the FS (samples do not fit). | Samples | Q19 |
 | A20 | English texts. Dates DD-MM-YYYY. Weights with 3 decimals. HSN "3917 2390". | Samples | — |
 | A21 | `.xlsx` only, first sheet, read with `CL_FDT_XL_SPREADSHEET`. | Target release | Q21 |
-| A22 | Re-uploading a saved packing list replaces it and increases the revision. Creation data is kept. | FS silent; "Rev.1" sample | Q17 |
+| A22 | Re-uploading a packing list that is already in the log table replaces its rows (no revision, no history). | FS silent; user: "keep the logic as FS stated" | Q17 |
 | A24 | Authorization object `ZSD_EPACK` (04 print, 01 save, per company code) + `V_VBRK_VKO` 04. | FS 2.3 empty | Q14 |
 | A25 | Output: preview, print, or PDF into a folder (one file per packing list). The default printer comes from the user master. | FS silent | — |
 | A26–A28 | Layout as the sample PDFs. Unused notify parties are crossed out with a graphic. Group values print on the first line. | FS + samples | Q20 |
@@ -56,9 +56,9 @@ example sheet: 77 lines, totals 4074 / 12146 / 116323.800 / 115386.780, matching
 | A33 | Several packing lists per file. A row without "Packing list no" belongs to the packing list above. | User request "multiple PL numbers" | Q01 |
 | A36 | Missing GSTIN / CIN / IEC / description / HSN gives a warning and an empty field. | FS silent | Q23 |
 | A38 | An exact duplicate row is ignored with a warning. The same Sl.No. with different values is an error. | User request "avoid duplicates" | Q03 |
-| A39 | Data is saved after a successful output, including preview. Nothing is saved or logged in "Validate only". | "at last add the data in Z table" | Q15 |
+| A39 | The log table is written after a successful output, including preview. Nothing is written in "Validate only". | "at last add the data in Z table" | Q15 |
 | A41 | Upload columns are recognised by heading text, so column order is free. Cell text "Fetch from …" means no value: the value is derived in SAP. | `Sample_data_ABAP.xlsx` | — |
-| A40 | Uploaded data → `ZSD_EPACK_HDR / INV / DATA` (FS table). Run log → new `ZSD_EPACK_LOG`, one row per packing list. | "Z table that was created for log" is ambiguous | Q16 |
+| A40 | One log table only: `ZSD_EPACK_DATA` in the FS Technical-detail layout, one row per line item. `VBRK_VBELN` is a STRING with all invoices of the packing list ("A, B, C"). A STRING cannot be a key field, so the key is MANDT + ZSD_PACKNO + ZSD_SN. Unit / currency reference fields ZSD_MEINS, ZSD_GEWEI, ZSD_WAERS are added for the quantity, weight and amount fields. | User decision | Q16 (closed) |
 
 ### Confirmed by the repository (no longer assumptions)
 
@@ -70,4 +70,4 @@ example sheet: 77 lines, totals 4074 / 12146 / 116323.800 / 115386.780, matching
 
 The separate upload transaction (`ZSD_EPACK_UPL`, old A23). The IEC override from the Excel
 (old A13). Document partners from VBPA (old A31; the Logic sheet requires KNVP). Contact person, FAX
-and tax number (old A15 / A16). Incoterm text from TINCT (old A18). One packing list per file (old A33).
+and tax number (old A15 / A16). Incoterm text from TINCT (old A18). One packing list per file (old A33). Tables `ZSD_EPACK_HDR` / `ZSD_EPACK_INV` / `ZSD_EPACK_LOG`, revision numbers and the "Saved packing lists" reprint option (one log table only, as in the FS).

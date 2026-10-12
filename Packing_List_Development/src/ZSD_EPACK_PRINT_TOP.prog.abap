@@ -40,10 +40,7 @@ CONSTANTS:
   gc_out_preview TYPE char1      VALUE 'V',
   gc_out_print   TYPE char1      VALUE 'P',
   gc_out_pdf     TYPE char1      VALUE 'F',
-  " Data source of a run
-  gc_src_excel   TYPE char1      VALUE 'U',
-  gc_src_saved   TYPE char1      VALUE 'R',
-  " Processing status per packing list (log)
+  " Processing status per packing list (result list)
   gc_st_success  TYPE zsd_epack_status VALUE 'S',
   gc_st_warning  TYPE zsd_epack_status VALUE 'W',
   gc_st_error    TYPE zsd_epack_status VALUE 'E',
@@ -58,11 +55,61 @@ CONSTANTS:
 * Types - packing list data
 *----------------------------------------------------------------------*
 TYPES:
-  ty_vbeln_range TYPE RANGE OF vbeln_vf,
   ty_packno_range TYPE RANGE OF zsd_packno,
   ty_vbeln_tab   TYPE SORTED TABLE OF vbeln_vf WITH UNIQUE KEY table_line,
-  ty_item_tab    TYPE STANDARD TABLE OF zsd_epack_data WITH DEFAULT KEY,
   ty_text_tab    TYPE STANDARD TABLE OF string WITH EMPTY KEY.
+
+TYPES:
+  " Header data of one packing list - FS "Technical detail" fields
+  " (logic sheet "Pass ZSD_PACKNO get ...")
+  BEGIN OF ty_header,
+    zsd_packno    TYPE zsd_packno,
+    zsd_packdt    TYPE zsd_packdt,
+    zsd_expref    TYPE zsd_expref,
+    zsd_party_ref TYPE zsd_party_ref,
+    zsd_ref_dt    TYPE zsd_ref_dt,
+    zsd_cnty_orgn TYPE zsd_cnty_orgn,
+    zsd_np1       TYPE zsd_np,
+    zsd_np2       TYPE zsd_np,
+    zsd_np3       TYPE zsd_np,
+    zsd_np4       TYPE zsd_np,
+    zsd_np5       TYPE zsd_np,
+    zsd_prec      TYPE zsd_prec,
+    zsd_rec_pc    TYPE zsd_rec_pc,
+    zsd_pol       TYPE zsd_pol,
+    zsd_pod       TYPE zsd_pod,
+    zsd_pld       TYPE zsd_pld,
+    zsd_mark      TYPE zsd_mark,
+    zsd_vsl_flt   TYPE zsd_vsl_flt,
+    zsd_cont      TYPE zsd_cont,
+    zsd_nopack    TYPE zsd_nopack,
+    zsd_hsn_desc  TYPE zsd_hsn_desc,
+    zsd_pl_decl   TYPE zsd_pl_decl,
+    zsd_adv_amt   TYPE zsd_adv_amt,
+    zsd_cmmt      TYPE zsd_cmmt,
+    zsd_inv_decl  TYPE zsd_inv_decl,
+  END OF ty_header,
+
+  " Line item of one packing list - FS "Technical detail" item fields
+  " plus the package groups needed for printing (A06, A09; not stored)
+  BEGIN OF ty_item,
+    zsd_packno   TYPE zsd_packno,
+    zsd_sn       TYPE zsd_sn,
+    zsd_inv_sn   TYPE zsd_inv_sn,
+    zsd_artno    TYPE zsd_artno,
+    zsd_std      TYPE zsd_std,
+    zsd_art      TYPE zsd_art,
+    zsd_partno   TYPE zsd_partno,
+    zsd_matdesc  TYPE zsd_matdesc,
+    zsd_qty      TYPE zsd_qty,
+    zsd_gwt      TYPE zsd_gwt,
+    zsd_nwt      TYPE zsd_nwt,
+    zsd_hsn      TYPE zsd_hsn,
+    zsd_art_grp  TYPE i,
+    zsd_wt_grp   TYPE i,
+    zsd_pkg_type TYPE char20,
+  END OF ty_item,
+  ty_item_tab TYPE STANDARD TABLE OF ty_item WITH DEFAULT KEY.
 
 TYPES:
   " One packing list: header, its invoices, its items and the messages
@@ -70,7 +117,7 @@ TYPES:
   " kept together under the packing list number.
   BEGIN OF ty_packing_list,
     packno   TYPE zsd_packno,
-    header   TYPE zsd_epack_hdr,
+    header   TYPE ty_header,
     invoices TYPE ty_vbeln_tab,
     items    TYPE ty_item_tab,
     rows     TYPE string,          " Excel rows of this packing list
@@ -120,13 +167,13 @@ TYPES:
     nwt        TYPE zsd_nwt,
     nwt_filled TYPE abap_bool,
     hsn        TYPE zsd_hsn,
-    pkg_type   TYPE zsd_pkg_type,
+    pkg_type   TYPE char20,
   END OF ty_upload_line,
   ty_upload_line_tab TYPE STANDARD TABLE OF ty_upload_line WITH EMPTY KEY.
 
 TYPES:
   BEGIN OF ty_pkg_total,
-    pkg_type TYPE zsd_pkg_type,
+    pkg_type TYPE char20,
     articles TYPE i,
   END OF ty_pkg_total,
   ty_pkg_total_tab TYPE STANDARD TABLE OF ty_pkg_total WITH EMPTY KEY,
@@ -359,15 +406,11 @@ TYPES:
 *----------------------------------------------------------------------*
 * Global data
 *----------------------------------------------------------------------*
-DATA gv_vbeln  TYPE vbeln_vf.          " selection screen reference
-DATA gv_packno TYPE zsd_packno.        " selection screen reference
-
 " Run data
 DATA gt_packing_lists TYPE ty_packing_list_tab.
 DATA gt_file_messages TYPE bapiret2_t.
 DATA gt_result        TYPE ty_result_tab.
 DATA gt_locked        TYPE SORTED TABLE OF zsd_packno WITH UNIQUE KEY table_line.
-DATA gv_runid         TYPE sysuuid_c32.
 DATA gv_default_dest  TYPE rspopname.
 
 " Excel column map of the uploaded file

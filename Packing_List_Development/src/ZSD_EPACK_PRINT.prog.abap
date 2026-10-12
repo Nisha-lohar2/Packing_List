@@ -13,16 +13,14 @@
 *&    (Logic_sheet1.xlsx).
 *& 3. Output ONE Smart Form per packing list number (with / without
 *&    notify party). An error in one packing list never stops the others.
-*& 4. At the end, save the data of every packing list that was output to
-*&    the Z tables and write one log row per packing list (ZSD_EPACK_LOG).
-*&
-*& Option "Saved packing lists" reprints packing lists saved earlier,
-*& selected by tax invoice and/or packing list number.
+*& 4. At the end, write the data of every packing list that was output
+*&    to the log table ZSD_EPACK_DATA (FS "Technical detail" layout: one
+*&    row per line item, all invoice numbers in one field VBRK_VBELN).
 *&
 *& Procedural program - no custom classes or interfaces:
 *&   ZSD_EPACK_PRINT_TOP  types, constants, global data
 *&   ZSD_EPACK_PRINT_SEL  selection screen and its events
-*&   ZSD_EPACK_PRINT_F01  main routines: upload, SAP data, forms, save, log
+*&   ZSD_EPACK_PRINT_F01  main routines: upload, SAP data, forms, log table
 *&   ZSD_EPACK_PRINT_F02  helper routines: package groups, weight rule,
 *&                        totals, formatting, parsing
 *&---------------------------------------------------------------------*
@@ -44,15 +42,11 @@ INCLUDE zsd_epack_print_f02.                " helper routines
 
 *&---------------------------------------------------------------------*
 *& Text elements
-*&   B01  Data source
+*&   B01  Excel file
 *&   B02  Output format
 *&   B03  Output
 *& Selection texts
-*&   P_XLS    Upload Excel file
 *&   P_FILE   Excel file (.xlsx)
-*&   P_SAVED  Saved packing lists (reprint)
-*&   S_VBELN  Tax Invoice
-*&   S_PACKNO Packing List No.
 *&   P_FAUTO  Automatic (notify party if maintained)
 *&   P_FWITH  With notify party
 *&   P_FWOUT  Without notify party
