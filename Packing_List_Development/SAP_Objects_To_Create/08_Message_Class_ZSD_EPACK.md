@@ -27,7 +27,6 @@ Message 001 is the **exact FS text**. `&1`…`&4` are placeholders. The same lis
 | 031 | Notify party &1 is filled but notify party &2 is empty |
 | 032 | Packing list &1 written to ZSD_EPACK_DATA (&2 lines, &3 invoices) |
 | 036 | The file contains no line items |
-| 038 | PDF saved: &1 |
 | 039 | Error &1 in &2 |
 | 040 | Adobe Form &1 does not exist or is not active |
 | 041 | Row &1: Sl.No. &2 is not in ascending order |
@@ -38,8 +37,6 @@ Message 001 is the **exact FS text**. `&1`…`&4` are placeholders. The same lis
 | 049 | &1 not found - field stays empty on the output |
 | 050 | &1 rows without Sl.No. were ignored (e.g. total row) |
 | 052 | Packing list &1 could not be written to ZSD_EPACK_DATA |
-| 053 | File &1 could not be written |
-| 054 | Enter a folder for the PDF download |
 | 055 | Row &1: no packing list number in or above this row - row ignored |
 | 056 | &1 repeated invoice number(s) counted once |
 | 057 | Row &1 is an exact duplicate of row &2 and was ignored |
@@ -51,7 +48,6 @@ Message 001 is the **exact FS text**. `&1`…`&4` are placeholders. The same lis
 | 064 | Output of packing list &1 cancelled by the user |
 | 065 | Form &1 output for packing list &2 |
 | 066 | &1 of &2 packing lists output, &3 saved, &4 with errors |
-| 067 | Validation only: &1 packing lists checked, &2 with errors |
 | 068 | Row &1: same Article No. &2 as the row above but different &3 - new package |
 
-**Total:** 47 messages.
+**Total:** 43 messages.

@@ -99,7 +99,7 @@ log data changes yes, table maintenance not allowed (written only by `ZSD_EPACK`
 | 41 | `ZSD_GEWEI` | | `GEWEI` (value `KG`) | | unit reference for weights |
 | 42 | `ZSD_WAERS` | | `WAERS` | | currency reference for `ZSD_ADV_AMT` |
 
-**When rows are written:** at the end of a run (not in "Validate only"), for every
+**When rows are written:** at the end of each run, for every
 packing list whose form was produced. One row per line item. If a packing list is
 uploaded again, its earlier rows are deleted and the new ones written.
 Packing lists with errors are not written; they appear only in the result list.
@@ -152,7 +152,6 @@ examples and sources: **`src/Adobe_Form_Interface_Structures.md`**.
 | `031` | `Notify party &1 is filled but notify party &2 is empty` | upload |
 | `032` | `Packing list &1 written to ZSD_EPACK_DATA (&2 lines, &3 invoices)` | save |
 | `036` | `The file contains no line items` | upload |
-| `038` | `PDF saved: &1` | report |
 | `039` | `Error &1 in &2` | output |
 | `040` | `Adobe Form &1 does not exist or is not active` | output |
 | `041` | `Row &1: Sl.No. &2 is not in ascending order` | rules |
@@ -163,8 +162,6 @@ examples and sources: **`src/Adobe_Form_Interface_Structures.md`**.
 | `049` | `&1 not found - field stays empty on the output` | data (warning) |
 | `050` | `&1 rows without Sl.No. were ignored (e.g. total row)` | upload (info) |
 | `052` | `Packing list &1 could not be written to ZSD_EPACK_DATA` | save |
-| `053` | `File &1 could not be written` | output |
-| `054` | `Enter a folder for the PDF download` | report |
 | `055` | `Row &1: no packing list number in or above this row - row ignored` | upload |
 | `056` | `&1 repeated invoice number(s) counted once` | upload (info) |
 | `057` | `Row &1 is an exact duplicate of row &2 and was ignored` | upload (warning) |
@@ -176,7 +173,6 @@ examples and sources: **`src/Adobe_Form_Interface_Structures.md`**.
 | `064` | `Output of packing list &1 cancelled by the user` | report (warning) |
 | `065` | `Form &1 output for packing list &2` | report |
 | `066` | `&1 of &2 packing lists output, &3 saved, &4 with errors` | report |
-| `067` | `Validation only: &1 packing lists checked, &2 with errors` | report |
 | `068` | `Row &1: same Article No. &2 as the row above but different &3 - new package` | rules (warning) |
 
 ---
@@ -247,7 +243,6 @@ Every table is read **once per run** for all packing lists (FOR ALL ENTRIES).
 | `MAKT` | `MAKTX` (logic sheet says `MARA`) | B54 |
 | `MARC` | `STEUC` for billed material + billing plant | B42, B58 |
 | `T604N` | `TEXT1` for `SPRAS` E, `LAND1` IN | B42 |
-| `USR01` | default printer | — |
 
 > ⚠ **Verify before activation** in DEV: `J_1BBRANCH-GSTIN`, `T604N` key and
 > text field, `TVZBT-ZTAGG`, `KNVP-DEFPA`, `ADR2-R3_USER` values. Each read is

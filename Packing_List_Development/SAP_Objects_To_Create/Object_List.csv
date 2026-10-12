@@ -40,7 +40,7 @@
 39;Table type;ZSD_TT_EPACK_AF_ITM;SE11;Adobe Form items;05;
 40;Form interface;ZSD_EPACK_AF_IF;SFP;IS_HEADER / IT_ITEM;06;
 41;Adobe Form;ZSD_EPACK_AF;SFP;The only form;07;
-42;Message class;ZSD_EPACK;SE91;47 messages — only if not existing;08;
+42;Message class;ZSD_EPACK;SE91;43 messages — only if not existing;08;
 43;Program;ZSD_EPACK_PRINT;SE38;Executable program;09;
 44;Include;ZSD_EPACK_PRINT_TOP;SE38;Types, data;09;
 45;Include;ZSD_EPACK_PRINT_SEL;SE38;Selection screen;09;

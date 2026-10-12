@@ -44,14 +44,6 @@ INCLUDE zsd_epack_print_f02.                " helper routines
 *&---------------------------------------------------------------------*
 *& Text elements
 *&   B01  Excel file
-*&   B02  Output
 *& Selection texts
 *&   P_FILE   Excel file (.xlsx)
-*&   P_PREV   Print preview
-*&   P_PRINT  Print
-*&   P_PDF    Download PDF (one file per packing list)
-*&   P_DEST   Output device
-*&   P_COPY   Number of copies
-*&   P_DIR    PDF folder
-*&   P_CHECK  Validate only (no form, no update)
 *&---------------------------------------------------------------------*

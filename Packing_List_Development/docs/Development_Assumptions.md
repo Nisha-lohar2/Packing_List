@@ -48,7 +48,7 @@ example sheet: 77 lines, totals 4074 / 12146 / 116323.800 / 115386.780, matching
 | A21 | `.xlsx` only, first sheet, read with `CL_FDT_XL_SPREADSHEET`. | Target release | Q21 |
 | A22 | Re-uploading a packing list that is already in the log table replaces its rows (no revision, no history). | FS silent; user: "keep the logic as FS stated" | Q17 |
 | A24 | Only the standard check `V_VBRK_VKO` 04 (per sales org.). No custom authorization object for now. | FS 2.3 empty | Q14 |
-| A25 | Output: preview, print, or PDF into a folder (one file per packing list). The default printer comes from the user master. | FS silent | — |
+| A25 | The selection screen has only the Excel file. Output is a print preview of each packing list on device `LP01` (fixed, constant `GC_DEST`); the user prints from the preview. No PDF download, no "Validate only". | User decision | — |
 | A26–A28 | Layout as the sample PDFs, in one Adobe Form. Empty notify parties are hidden. Group values print on the first row of the group; borders inside a group are hidden. | FS + samples | Q20 |
 | A29 | S/4HANA, ABAP ≥ 7.54 (same as the other Astral / UDAY developments). | Repository | Q21 |
 | A30 | Several telephone / mobile / e-mail entries: the default entry, else the first one found. | Logic B21–B23 | — |
@@ -56,7 +56,7 @@ example sheet: 77 lines, totals 4074 / 12146 / 116323.800 / 115386.780, matching
 | A33 | Several packing lists per file. A row without "Packing list no" belongs to the packing list above. | User request "multiple PL numbers" | Q01 |
 | A36 | Missing GSTIN / CIN / IEC / description / HSN gives a warning and an empty field. | FS silent | Q23 |
 | A38 | An exact duplicate row is ignored with a warning. The same Sl.No. with different values is an error. | User request "avoid duplicates" | Q03 |
-| A39 | The log table is written after a successful output, including preview. Nothing is written in "Validate only". | "at last add the data in Z table" | Q15 |
+| A39 | The log table is written after every successful form output (the print preview). | "at last add the data in Z table" | Q15 |
 | A41 | Upload columns are recognised by heading text, so column order is free. Cell text "Fetch from …" means no value: the value is derived in SAP. | `Sample_data_ABAP.xlsx` | — |
 | A40 | One log table only: `ZSD_EPACK_DATA` in the FS Technical-detail layout, one row per line item. `VBRK_VBELN` is a STRING with all invoices of the packing list ("A, B, C"). A STRING cannot be a key field, so the key is MANDT + ZSD_PACKNO + ZSD_SN. Unit / currency reference fields ZSD_MEINS, ZSD_GEWEI, ZSD_WAERS are added for the quantity, weight and amount fields. | User decision | Q16 (closed) |
 

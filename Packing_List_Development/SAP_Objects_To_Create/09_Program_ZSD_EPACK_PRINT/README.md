@@ -16,14 +16,9 @@ the include and paste its source. Activate all together (they reference files 01
 | Type | Key | Text |
 |---|---|---|
 | Text symbol | `B01` | Excel file |
-| Text symbol | `B02` | Output |
 | Selection text | `P_FILE` | Excel file (.xlsx) |
-| Selection text | `P_PREV` | Print preview |
-| Selection text | `P_PRINT` | Print |
-| Selection text | `P_PDF` | Download PDF (one file per packing list) |
-| Selection text | `P_DEST` | Output device |
-| Selection text | `P_COPY` | Number of copies |
-| Selection text | `P_DIR` | PDF folder |
-| Selection text | `P_CHECK` | Validate only (no form, no update) |
+
+Selection screen: only the Excel file (mandatory). Output: print preview of each packing list on
+device `LP01` (constant `GC_DEST` in `ZSD_EPACK_PRINT_TOP`); the user prints from the preview.
 
 Run with SE38 / SA38 (no transaction code for now).

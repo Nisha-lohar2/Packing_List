@@ -37,17 +37,13 @@ FORM main.
     PERFORM prepare_all.
 
     " Step 3 - one form per packing list
-    IF p_check = abap_false.
-      PERFORM output_forms.
-    ENDIF.
+    PERFORM output_forms.
   ENDIF.
 
-  " Step 4 - write the data to the log table ZSD_EPACK_DATA (not in
-  " "Validate only"), then the result list
-  IF p_check = abap_false.
-    PERFORM save_packing_lists.
-    PERFORM finish_db.
-  ENDIF.
+  " Step 4 - write the data to the log table ZSD_EPACK_DATA, then the
+  " result list
+  PERFORM save_packing_lists.
+  PERFORM finish_db.
 
   PERFORM final_message.
   PERFORM show_result.
@@ -1707,20 +1703,13 @@ ENDFORM.
 *&---------------------------------------------------------------------*
 FORM output_forms.
 
-  DATA lv_output TYPE char1.
-  DATA lv_path   TYPE string.
-  DATA lv_done   TYPE abap_bool.
-  DATA lt_err    TYPE bapiret2_t.
-
-  lv_output = COND #( WHEN p_print = abap_true THEN gc_out_print
-                      WHEN p_pdf   = abap_true THEN gc_out_pdf
-                      ELSE gc_out_preview ).
+  DATA lv_done TYPE abap_bool.
+  DATA lt_err  TYPE bapiret2_t.
 
   LOOP AT gt_result ASSIGNING FIELD-SYMBOL(<ls_result>) WHERE status <> gc_st_error.
 
-    PERFORM pdf_path USING <ls_result>-packno CHANGING lv_path.
     CLEAR lt_err.
-    PERFORM send_form USING <ls_result>-print lv_output lv_path CHANGING lv_done lt_err.
+    PERFORM send_form USING <ls_result>-print CHANGING lv_done lt_err.
 
     IF lt_err IS NOT INITIAL.
       APPEND LINES OF lt_err TO <ls_result>-messages.
@@ -1730,9 +1719,6 @@ FORM output_forms.
       <ls_result>-output = abap_true.
       PERFORM add_msg USING 'S' '065' <ls_result>-print-form <ls_result>-packno space space
                       CHANGING <ls_result>-messages.
-      IF lv_output = gc_out_pdf.
-        PERFORM add_msg USING 'S' '038' lv_path space space space CHANGING <ls_result>-messages.
-      ENDIF.
     ELSE.
       PERFORM add_msg USING 'W' '064' <ls_result>-packno space space space CHANGING <ls_result>-messages.
       <ls_result>-status = gc_st_warning.
@@ -1743,11 +1729,9 @@ FORM output_forms.
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Call the Adobe Form for one packing list (preview / print / PDF)
+*& Call the Adobe Form for one packing list: print preview on LP01
 *&---------------------------------------------------------------------*
 FORM send_form USING    is_print    TYPE ty_print_data
-                        iv_output   TYPE char1
-                        iv_pdf_path TYPE string
                CHANGING cv_done     TYPE abap_bool
                         ct_messages TYPE bapiret2_t.
 
@@ -1755,9 +1739,7 @@ FORM send_form USING    is_print    TYPE ty_print_data
   DATA ls_outpar  TYPE sfpoutputparams.
   DATA ls_docpar  TYPE sfpdocparams.
   DATA ls_formout TYPE fpformoutput.
-  DATA lv_dest    TYPE rspopname.
   DATA lv_subrc   TYPE sysubrc.
-  DATA lv_ok      TYPE abap_bool.
 
   cv_done = abap_false.
 
@@ -1773,28 +1755,13 @@ FORM send_form USING    is_print    TYPE ty_print_data
       RETURN.
   ENDTRY.
 
-  " Output device: selection screen, else the user's default printer
-  " (read once per run), else LOCL
-  lv_dest = p_dest.
-  IF lv_dest IS INITIAL.
-    IF gv_default_dest IS INITIAL.
-      SELECT SINGLE spld FROM usr01 WHERE bname = @sy-uname INTO @gv_default_dest.
-      IF gv_default_dest IS INITIAL.
-        gv_default_dest = 'LOCL'.
-      ENDIF.
-    ENDIF.
-    lv_dest = gv_default_dest.
-  ENDIF.
-
+  " Print preview on LP01 - the user prints from the preview
   ls_outpar-nodialog = abap_true.
-  ls_outpar-preview  = xsdbool( iv_output = gc_out_preview ).
-  ls_outpar-getpdf   = xsdbool( iv_output = gc_out_pdf ).
-  ls_outpar-reqimm   = xsdbool( iv_output = gc_out_print ).
+  ls_outpar-preview  = abap_true.
   ls_outpar-reqnew   = abap_true.
-  ls_outpar-dest     = lv_dest.
-  ls_outpar-copies   = COND #( WHEN p_copy IS INITIAL THEN 1 ELSE p_copy ).
+  ls_outpar-dest     = gc_dest.
 
-  " One job per packing list: one preview / spool request / PDF each
+  " One job per packing list: one preview each
   CALL FUNCTION 'FP_JOB_OPEN'
     CHANGING
       ie_outputparams = ls_outpar
@@ -1843,73 +1810,7 @@ FORM send_form USING    is_print    TYPE ty_print_data
     RETURN.
   ENDIF.
 
-  IF iv_output = gc_out_pdf.
-    PERFORM download_pdf USING ls_formout-pdf iv_pdf_path CHANGING lv_ok ct_messages.
-    IF lv_ok = abap_false.
-      RETURN.
-    ENDIF.
-  ENDIF.
-
   cv_done = abap_true.
-
-ENDFORM.
-
-*&---------------------------------------------------------------------*
-*& PDF of the Adobe Form -> file on the PC
-*&---------------------------------------------------------------------*
-FORM download_pdf USING    iv_pdf      TYPE xstring
-                           iv_path     TYPE string
-                  CHANGING cv_ok       TYPE abap_bool
-                           ct_messages TYPE bapiret2_t.
-
-  DATA lv_size  TYPE i.
-  DATA lt_solix TYPE solix_tab.
-
-  cv_ok = abap_false.
-
-  IF iv_pdf IS INITIAL.
-    PERFORM add_msg USING 'E' '039' '0' 'PDF' space space CHANGING ct_messages.
-    RETURN.
-  ENDIF.
-
-  lv_size  = xstrlen( iv_pdf ).
-  lt_solix = cl_bcs_convert=>xstring_to_solix( iv_pdf ).
-
-  cl_gui_frontend_services=>gui_download(
-    EXPORTING  bin_filesize = lv_size
-               filename     = iv_path
-               filetype     = 'BIN'
-    CHANGING   data_tab     = lt_solix
-    EXCEPTIONS OTHERS       = 1 ).
-  IF sy-subrc <> 0.
-    PERFORM add_msg USING 'E' '053' iv_path space space space CHANGING ct_messages.
-    RETURN.
-  ENDIF.
-
-  cv_ok = abap_true.
-
-ENDFORM.
-
-*&---------------------------------------------------------------------*
-*& One PDF file per packing list: <folder>\PackingList_<no>.pdf
-*&---------------------------------------------------------------------*
-FORM pdf_path USING    iv_packno TYPE zsd_packno
-              CHANGING cv_path   TYPE string.
-
-  DATA lv_sep TYPE c LENGTH 1.
-
-  CLEAR cv_path.
-  IF p_pdf = abap_false.
-    RETURN.
-  ENDIF.
-
-  cl_gui_frontend_services=>get_file_separator( CHANGING   file_separator = lv_sep
-                                                EXCEPTIONS OTHERS         = 1 ).
-  IF sy-subrc <> 0 OR lv_sep IS INITIAL.
-    lv_sep = '\'.
-  ENDIF.
-
-  cv_path = |{ condense( CONV string( p_dir ) ) }{ lv_sep }PackingList_{ iv_packno ALPHA = OUT }.pdf|.
 
 ENDFORM.
 
@@ -2035,8 +1936,6 @@ FORM final_message.
 
   IF lv_total = 0.
     MESSAGE s059(zsd_epack) DISPLAY LIKE 'E'.
-  ELSEIF p_check = abap_true.
-    MESSAGE s067(zsd_epack) WITH lv_total lv_error.
   ELSEIF lv_error > 0.
     MESSAGE s066(zsd_epack) WITH lv_output lv_total lv_saved lv_error DISPLAY LIKE 'W'.
   ELSE.
@@ -2123,7 +2022,7 @@ FORM show_result.
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& F4 help: Excel file / PDF folder
+*& F4 help: Excel file
 *&---------------------------------------------------------------------*
 FORM f4_file CHANGING cv_file TYPE rlgrap-filename.
 
@@ -2143,15 +2042,3 @@ FORM f4_file CHANGING cv_file TYPE rlgrap-filename.
 
 ENDFORM.
 
-FORM f4_folder CHANGING cv_dir TYPE rlgrap-filename.
-
-  DATA lv_folder TYPE string.
-
-  cl_gui_frontend_services=>directory_browse(
-    CHANGING   selected_folder = lv_folder
-    EXCEPTIONS OTHERS          = 1 ).
-  IF sy-subrc = 0 AND lv_folder IS NOT INITIAL.
-    cv_dir = lv_folder.
-  ENDIF.
-
-ENDFORM.

@@ -30,10 +30,8 @@ CONSTANTS:
   gc_form_name   TYPE fpname     VALUE 'ZSD_EPACK_AF',
   gc_fmt_with_np TYPE char1      VALUE 'N',
   gc_fmt_wout_np TYPE char1      VALUE 'O',
-  " Output channel
-  gc_out_preview TYPE char1      VALUE 'V',
-  gc_out_print   TYPE char1      VALUE 'P',
-  gc_out_pdf     TYPE char1      VALUE 'F',
+  " Output device for the form (print preview, printable from there)
+  gc_dest        TYPE rspopname  VALUE 'LP01',
   " Processing status per packing list (result list)
   gc_st_success  TYPE char1      VALUE 'S',
   gc_st_warning  TYPE char1      VALUE 'W',
@@ -418,7 +416,6 @@ TYPES:
 DATA gt_packing_lists TYPE ty_packing_list_tab.
 DATA gt_file_messages TYPE bapiret2_t.
 DATA gt_result        TYPE ty_result_tab.
-DATA gv_default_dest  TYPE rspopname.
 
 " Excel column map of the uploaded file
 DATA gs_col TYPE ty_col.

@@ -168,7 +168,7 @@ Each implemented assumption has an id (`Axx`) in the code. `docs/Development_Ass
 | Q12 | Total Articles | B52 reads `ZSD_TART`, but the template has no column. Is calculating Σ Articles correct? | Calculated (A08) | — |
 | Q13 | Weight check level | FS: GW ≥ NW. Per package group, or per line? (Weights are given per merged group.) | Per weight group, at upload and at output (A07) | Rule granularity |
 | Q14 | Authorization | FS §2.3 is empty. Is the standard check `V_VBRK_VKO` (print per sales org.) enough for now? | Yes, no custom object (A24) | Roles |
-| Q15 | When to write the log | Write `ZSD_EPACK_DATA` after **preview** as well, or only after print / PDF? | After any successful output, incl. preview. Never in "Validate only" (A39) | One condition |
+| Q15 | When to write the log | The only output is the print preview. Write `ZSD_EPACK_DATA` after the preview? | Yes, after every successful form output (A39) | One condition |
 | Q16 | Log table | **Decided**: one table `ZSD_EPACK_DATA` as in the FS, invoices as one STRING (A40) | — | — |
 | Q17 | Re-upload | Uploading a PL that is already in the log replaces its rows. Is history needed? | Replace (A22) | Key / history |
 | Q18 | Package type | Sample 90000014 shows "Loose Pipes / Boxes" subtotals. Is the new optional column AL acceptable? | Yes (A09) | Template |
@@ -185,8 +185,7 @@ Each implemented assumption has an id (`Axx`) in the code. `docs/Development_Ass
 ```
  ZSD_EPACK_PRINT selection screen (SE38 / SA38)
    Excel file (.xlsx)
-   output: preview / print / PDF folder
-   [ ] Validate only
+   (only the file; output = print preview on LP01, printable from there)
           │
  1  FORM collect_packing_lists / parse_rows
    read_file (GUI_UPLOAD) → CL_FDT_XL_SPREADSHEET → rows
@@ -212,10 +211,10 @@ Each implemented assumption has an id (`Axx`) in the code. `docs/Development_Ass
  3  FORM output_forms
    LOOP over results (one per PL), skip status E
      FORM send_form: FP_FUNCTION_MODULE_NAME, FP_JOB_OPEN, form call with
-     IS_HEADER / IT_ITEM of THIS PL only, FP_JOB_CLOSE → preview / spool / PDF file
+     IS_HEADER / IT_ITEM of THIS PL only, FP_JOB_CLOSE → print preview on LP01
      error → logged on this PL, loop continues
           │
- 4  FORM save_packing_lists / finish_db  (skipped in "Validate only")
+ 4  FORM save_packing_lists / finish_db
    SAVE_PACKING_LISTS: PLs with output = X → ZSD_EPACK_DATA
      one row per line item; header fields repeated on every row;
      VBRK_VBELN = all invoices of the PL, comma-separated (STRING)
@@ -232,7 +231,7 @@ time. Billing items are collected per PL only from that PL's invoices.
 
 **Performance.** The Excel is parsed once, with no DB access. Data retrieval is **18 SELECTs per run**
 (13 in `READ_SAP_DATA`, 5 in `READ_ADDRESSES`), independent of the number of packing lists, invoices
-or items. Add one read of the default printer.
+or items.
 There is no SELECT in a loop.
 Lookups use hashed / sorted keys. The writes are 1 DELETE and 1 INSERT on `ZSD_EPACK_DATA`, both
 array operations. AUTHORITY-CHECK results are buffered per value.
@@ -248,7 +247,7 @@ marked **(Qxx)** depend on the answer to that question.
 |---|---|---|---|---|
 | T01 | One invoice, one PL | 1 PL, 1 invoice, 2 lines | 1 PL with 1 invoice, 2 items; 1 form; 2 rows in `ZSD_EPACK_DATA` | MT + IT |
 | T02 | Several invoices, same PL | invoices in one cell "A, B" and in another row | 3 invoices on the PL; header from SAP identical for all; 1 form | MT + IT |
-| T03 | Several PLs in one file | PL 90000014 rows + PL 90000081 rows | 2 results, **2 separate forms** (2 previews / 2 spool requests / 2 PDF files), rows of both PLs in `ZSD_EPACK_DATA` | MT + IT |
+| T03 | Several PLs in one file | PL 90000014 rows + PL 90000081 rows | 2 results, **2 separate forms** (2 print previews), rows of both PLs in `ZSD_EPACK_DATA` | MT + IT |
 | T04 | Items belong to their own PL only | parts PART-A* under PL A, PART-B* under PL B | form A shows only PART-A*, form B only PART-B* | MT + IT |
 | T05 | Several line items / merged groups | full `Example_90000081` sheet (77 lines) | 77 rows; Articles / weights on the first line of each group; totals 4074 / 12146 / 116323.800 / 115386.780; text "(Total 4074 Bundles)" | MT + IT, compare with PDF 90000081 |
 | T06 | Two package types, two HSN | Tarmac data (sample 90000014) | headings "PP LOW NOISE PIPES … 3917 2390", "… FITTINGS … 3917 4000"; "2342 <=Loose Pipes", "1073 <=Boxes"; "(Total 2342 Loose Pipes + 1073 Boxes = 3415 Packages)" | MT + IT |
@@ -272,10 +271,9 @@ marked **(Qxx)** depend on the answer to that question.
 | T24 | Part not on any invoice | Part No. not billed | warning 030; HSN from upload only | IT |
 | T25 | Notify parties | 0 NP / 1–5 NP | one form `ZSD_EPACK_AF`: notify-party section hidden / shown with the filled parties only | IT |
 | T26 | Form missing / form error | deactivate `ZSD_EPACK_AF` | error 040 / 039 logged for that PL; the loop continues with the next PL | IT |
-| T28 | PDF per PL | PDF + folder, 2 PLs | `PackingList_90000014.pdf`, `PackingList_90000081.pdf` | IT |
+| T28 | Output device | any file | preview on LP01; printing from the preview creates a spool request on LP01 | IT |
 | T29 | Log table | after T03 | `ZSD_EPACK_DATA`: one row per line item of each PL; header fields on every row; `VBRK_VBELN` holds all invoices of the PL in one string ("A, B, C"); `ZSD_TART` = Σ Articles; message 032 | IT |
 | T30 | Re-upload | T03 file again | rows of both PLs replaced, no duplicates **(Q17)** | IT |
-| T31 | Validate only | any file | result list, no form, no DB change | IT |
 | T33 | Authorization | user without `V_VBRK_VKO` 04 for the sales org. | error 012, no form, nothing written **(Q14)** | IT |
 | T34 | Volume | 20 PLs × 100 lines, 100 invoices | runtime dominated by form output; SQL trace shows 18 data SELECTs | IT (ST05) |
 | T36 | Business sample file | `test_data/Sample_data_ABAP.xlsx` | 1 PL (90000088), 3 invoices, 9 items, 3 packages; totals 120 / 884 / 1527.000 / 1423.000; notify-party section shown; 7 warnings 029 — see `test_data/Sample_data_ABAP_Expected_Results.md` | MT + IT |

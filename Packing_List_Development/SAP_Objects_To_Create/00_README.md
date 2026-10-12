@@ -36,7 +36,8 @@ Create the objects in the order of the files 01 → 09. Activate after each step
 
 1. Activate the program; fix anything marked `SAP-VERIFY` in the source comments
    (`J_1BBRANCH-GSTIN`, `T604N`, `TVZBT-ZTAGG`, `KNVP-DEFPA`, `ADR2-R3_USER`).
-2. Run `ZSD_EPACK_PRINT` with `test_data/Sample_data_ABAP.xlsx` → expected result in
+2. Device `LP01` must exist in SPAD (else change constant `GC_DEST` in `ZSD_EPACK_PRINT_TOP`).
+3. Run `ZSD_EPACK_PRINT` with `test_data/Sample_data_ABAP.xlsx` → expected result in
    `test_data/Sample_data_ABAP_Expected_Results.md`.
 
 The code has **not** been compiled in an SAP system yet.
