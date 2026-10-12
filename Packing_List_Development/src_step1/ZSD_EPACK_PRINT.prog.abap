@@ -15,8 +15,8 @@ REPORT zsd_epack_print.
 *----------------------------------------------------------------------*
 TYPES:
   BEGIN OF ty_upload,
-    zsd_packno    TYPE zsd_vbeln,       " Packing list Number
-    vbrk_vbeln    TYPE z_string,        " SAP Invoice Number (one or "A, B")
+    zsd_packno    TYPE string,          " Packing list Number
+    vbrk_vbeln    TYPE string,          " SAP Invoice Number(s) - several per cell
     zsd_sn        TYPE zserno,          " Sl.No.
     zsd_inv_sn    TYPE zserno,          " Sr.No. INV
     zsd_artno     TYPE zchar15,         " Article No.
@@ -86,6 +86,7 @@ START-OF-SELECTION.
 *----------------------------------------------------------------------*
   PERFORM read_file.
   PERFORM read_worksheet.
+  PERFORM map_data.
   PERFORM display.
 
 *&---------------------------------------------------------------------*
@@ -162,7 +163,190 @@ FORM read_worksheet.
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& 3. Show the internal table (to check what was read)
+*& 3. Excel rows -> GT_UPLOAD
+*&    Row 1 is the heading row and is skipped. Columns are mapped by
+*&    position: Excel column 1 (A) -> 1st field of TY_UPLOAD, column 2
+*&    (B) -> 2nd field ... column 37 (AK) -> ZSD_INV_DECL.
+*&---------------------------------------------------------------------*
+FORM map_data.
+
+  DATA ls_upload TYPE ty_upload.
+  DATA lv_col    TYPE i.
+  DATA lv_text   TYPE string.
+  DATA lv_ok     TYPE abap_bool.
+  DATA lv_errors TYPE i.
+
+  FIELD-SYMBOLS <ls_excel> TYPE any.
+  FIELD-SYMBOLS <lv_cell>  TYPE any.
+  FIELD-SYMBOLS <lv_field> TYPE any.
+
+  CLEAR gt_upload.
+
+  LOOP AT <gt_excel> ASSIGNING <ls_excel> FROM 2.     " skip heading row
+
+    CLEAR ls_upload.
+
+    DO.
+      lv_col = sy-index.
+
+      " Target field n of TY_UPLOAD - stop after the last field
+      ASSIGN COMPONENT lv_col OF STRUCTURE ls_upload TO <lv_field>.
+      IF sy-subrc <> 0.
+        EXIT.
+      ENDIF.
+
+      " Excel cell in column n - stop if the sheet has fewer columns
+      ASSIGN COMPONENT lv_col OF STRUCTURE <ls_excel> TO <lv_cell>.
+      IF sy-subrc <> 0.
+        EXIT.
+      ENDIF.
+
+      lv_text = <lv_cell>.
+      IF condense( lv_text ) IS INITIAL.
+        CONTINUE.                                        " empty cell
+      ENDIF.
+
+      PERFORM convert_cell USING lv_text CHANGING <lv_field> lv_ok.
+      IF lv_ok = abap_false.
+        lv_errors = lv_errors + 1.
+      ENDIF.
+    ENDDO.
+
+    " Completely empty Excel rows are not taken over
+    IF ls_upload IS NOT INITIAL.
+      APPEND ls_upload TO gt_upload.
+    ENDIF.
+
+  ENDLOOP.
+
+  IF gt_upload IS INITIAL.
+    MESSAGE 'The file contains no data below the heading row' TYPE 'S' DISPLAY LIKE 'E'.
+    LEAVE LIST-PROCESSING.
+  ENDIF.
+
+  IF lv_errors > 0.
+    MESSAGE |{ lv_errors } cell(s) could not be converted (number / date) and were left empty|
+      TYPE 'S' DISPLAY LIKE 'W'.
+  ENDIF.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& One Excel cell (text) -> target field, converted by the field type:
+*&   date fields   : Excel date number (e.g. 46275) or DD.MM.YYYY,
+*&                   DD-MM-YYYY, DD/MM/YYYY, YYYY-MM-DD
+*&   number fields : "2107.2000000000003", "1,234.5"
+*&   text fields   : as it is (incl. several invoice numbers in one cell)
+*&---------------------------------------------------------------------*
+FORM convert_cell USING    iv_text  TYPE string
+                  CHANGING cv_field TYPE any
+                           cv_ok    TYPE abap_bool.
+
+  DATA lv_kind TYPE c LENGTH 1.
+  DATA lv_text TYPE string.
+  DATA lv_num  TYPE decfloat34.
+  DATA lv_int  TYPE i.
+  DATA lv_date TYPE d.
+
+  cv_ok = abap_true.
+  DESCRIBE FIELD cv_field TYPE lv_kind.
+  lv_text = condense( iv_text ).
+
+  CASE lv_kind.
+
+    WHEN 'D'.                                            " date
+      PERFORM convert_date USING lv_text CHANGING lv_date cv_ok.
+      IF cv_ok = abap_true.
+        cv_field = lv_date.
+      ENDIF.
+
+    WHEN 'N' OR 'I' OR 'b' OR 's' OR '8'.                " whole number
+      REPLACE ALL OCCURRENCES OF `,` IN lv_text WITH ``.
+      TRY.
+          lv_num = lv_text.
+          lv_int = round( val = lv_num dec = 0 ).
+          cv_field = lv_int.
+        CATCH cx_sy_conversion_error cx_sy_arithmetic_error.
+          cv_ok = abap_false.
+      ENDTRY.
+
+    WHEN 'P' OR 'F' OR 'a' OR 'e'.                       " decimal number
+      REPLACE ALL OCCURRENCES OF `,` IN lv_text WITH ``.
+      TRY.
+          lv_num = lv_text.
+          cv_field = lv_num.
+        CATCH cx_sy_conversion_error cx_sy_arithmetic_error.
+          cv_ok = abap_false.
+      ENDTRY.
+
+    WHEN OTHERS.                                         " text, as it is
+      cv_field = iv_text.
+
+  ENDCASE.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Excel date -> ABAP date
+*&---------------------------------------------------------------------*
+FORM convert_date USING    iv_text TYPE string
+                  CHANGING cv_date TYPE d
+                           cv_ok   TYPE abap_bool.
+
+  DATA lv_text TYPE string.
+  DATA lv_day  TYPE string.
+  DATA lv_mon  TYPE string.
+  DATA lv_year TYPE string.
+  DATA lv_num  TYPE decfloat34.
+  DATA lv_days TYPE i.
+
+  CLEAR cv_date.
+  cv_ok = abap_false.
+  lv_text = iv_text.
+
+  IF matches( val = lv_text regex = `\d+(\.\d+)?` ).
+    " Excel stores dates as day numbers counted from 30.12.1899
+    TRY.
+        lv_num = lv_text.
+      CATCH cx_sy_conversion_error.
+        RETURN.
+    ENDTRY.
+    IF lv_num < 1 OR lv_num > 2958465.
+      RETURN.
+    ENDIF.
+    lv_days = trunc( lv_num ).
+    cv_date = '18991230'.
+    cv_date = cv_date + lv_days.
+  ELSE.
+    REPLACE ALL OCCURRENCES OF REGEX `[/-]` IN lv_text WITH `.`.
+    SPLIT lv_text AT '.' INTO lv_day lv_mon lv_year.
+    IF strlen( lv_day ) = 4.                             " YYYY.MM.DD
+      lv_text = lv_day.
+      lv_day  = lv_year.
+      lv_year = lv_text.
+    ENDIF.
+    IF strlen( lv_year ) <> 4 OR lv_day IS INITIAL OR lv_mon IS INITIAL.
+      RETURN.
+    ENDIF.
+    cv_date = |{ lv_year }{ lv_mon WIDTH = 2 ALIGN = RIGHT PAD = '0' }{ lv_day WIDTH = 2 ALIGN = RIGHT PAD = '0' }|.
+  ENDIF.
+
+  CALL FUNCTION 'DATE_CHECK_PLAUSIBILITY'
+    EXPORTING
+      date                      = cv_date
+    EXCEPTIONS
+      plausibility_check_failed = 1
+      OTHERS                    = 2.
+  IF sy-subrc = 0.
+    cv_ok = abap_true.
+  ELSE.
+    CLEAR cv_date.
+  ENDIF.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& 4. Show the internal table (to check what was read)
 *&---------------------------------------------------------------------*
 FORM display.
 
@@ -173,7 +357,7 @@ FORM display.
         IMPORTING
           r_salv_table = lo_alv
         CHANGING
-          t_table      = <gt_excel> ).
+          t_table      = gt_upload ).
       lo_alv->get_functions( )->set_all( abap_true ).
       lo_alv->display( ).
     CATCH cx_salv_msg.
