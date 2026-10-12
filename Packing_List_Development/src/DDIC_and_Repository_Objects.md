@@ -175,7 +175,7 @@ Foreign key `ZSD_PACKNO` → `ZSD_EPACK_HDR`.
 
 ### 2.4 `ZSD_EPACK_LOG` — processing log (one row per packing list per run)
 
-Written by `ZCL_SD_EPACK_STORE->WRITE_LOG` at the end of every run of
+Written by FORM `WRITE_LOG` (include `ZSD_EPACK_PRINT_F01`) at the end of every run of
 `ZSD_EPACK`, except "Validate only". It covers successful and failed packing lists.
 File-level problems get one extra row with an empty packing list number.
 Delivery class `A`, no buffering. **Request: "at last add the data in the Z table that was created for log"** (Q16).
@@ -287,7 +287,7 @@ Generates `ENQUEUE_EZSD_EPACK` / `DEQUEUE_EZSD_EPACK` (parameter
 | `013` | `Notify parties exist for packing list &1 - use format with notify party` | data |
 | `014` | `Packing list &1 is locked by user &2 - not saved` | store |
 | `015` | `File &1 could not be read: &2` | upload |
-| `016` | `File is not the packing list template (column &1 heading "&2")` | upload |
+| `016` | `Column "&1" not found in the heading row of the file` | upload |
 | `017` | `Row &1: mandatory field &2 is empty` | upload |
 | `018` | `Row &1: "&2" in column &3 is not a valid number` | upload |
 | `019` | `Row &1: "&2" in column &3 is not a valid date` | upload |
@@ -328,6 +328,7 @@ Generates `ENQUEUE_EZSD_EPACK` / `DEQUEUE_EZSD_EPACK` (parameter
 | `065` | `Form &1 output for packing list &2` | report |
 | `066` | `&1 of &2 packing lists output, &3 saved, &4 with errors` | report |
 | `067` | `Validation only: &1 packing lists checked, &2 with errors` | report |
+| `068` | `Row &1: same Article No. &2 as the row above but different &3 - new package` | rules (warning) |
 
 ---
 
@@ -336,14 +337,11 @@ Generates `ENQUEUE_EZSD_EPACK` / `DEQUEUE_EZSD_EPACK` (parameter
 | Object | Type | Purpose |
 |---|---|---|
 | `ZSD_EPACK` | Package | Container |
-| `ZIF_SD_EPACK` | Interface | Types, constants |
-| `ZCX_SD_EPACK` | Exception class | Errors with message list |
-| `ZCL_SD_EPACK_UPLOAD` | Class | Excel parsing, split by packing list number (**+ 20 unit tests**) |
-| `ZCL_SD_EPACK_RULES` | Class | Package groups, FS weight check, totals, formatting, parsing (**+ 26 unit tests**) |
-| `ZCL_SD_EPACK_DATA` | Class | Logic-sheet data retrieval for all packing lists in bulk, checks, form data |
-| `ZCL_SD_EPACK_OUTPUT` | Class | Smart Form call, PDF download, result list |
-| `ZCL_SD_EPACK_STORE` | Class | Save to `ZSD_EPACK_HDR/INV/DATA`, log to `ZSD_EPACK_LOG` |
-| `ZSD_EPACK_PRINT` | Executable program | Selection screen, run control |
+| `ZSD_EPACK_PRINT` | Executable program | Report frame, START-OF-SELECTION |
+| `ZSD_EPACK_PRINT_TOP` | Include | Types, constants, global data |
+| `ZSD_EPACK_PRINT_SEL` | Include | Selection screen and its events |
+| `ZSD_EPACK_PRINT_F01` | Include | Main FORM routines: upload, SAP data (bulk), forms, save, log, result list |
+| `ZSD_EPACK_PRINT_F02` | Include | Helper FORM routines: package groups, weight rule, totals, formatting, parsing |
 | `ZSD_EPACK_WITH_NP` | Smart Form | Format with notify parties (see `docs/ZSD_EPACK_SmartForm_Specification.md`) |
 | `ZSD_EPACK_WITHOUT_NP` | Smart Form | Format without notify parties |
 | `ZSD_EPACK_STYLE` | Smart Style | Shared paragraph / character formats |
@@ -369,8 +367,8 @@ Upload, form output and saving are now one run of `ZSD_EPACK`.
 | `V_VBRK_VKO` | `VKORG`, `ACTVT` = 04 | Print — for each sales org. of the invoices |
 
 > Placeholder until security defines the concept (CL-22 / Q14). The checks are
-> isolated in `ZCL_SD_EPACK_DATA->CHECK_AUTHORITY` and
-> `ZCL_SD_EPACK_STORE->SAVE_PACKING_LISTS`.
+> isolated in FORMs `CHECK_AUTHORITY` and `SAVE_PACKING_LISTS`
+> (include `ZSD_EPACK_PRINT_F01`).
 
 ---
 
@@ -412,7 +410,7 @@ Every table is read **once per run** for all packing lists (FOR ALL ENTRIES).
 
 > ⚠ **Verify before activation** in DEV: `J_1BBRANCH-GSTIN`, `T604N` key and
 > text field, `TVZBT-ZTAGG`, `KNVP-DEFPA`, `ADR2-R3_USER` values. Each read is
-> in `ZCL_SD_EPACK_DATA->READ_SAP_DATA` / `READ_ADDRESSES`.
+> in FORMs `READ_SAP_DATA` / `READ_ADDRESSES` (include `ZSD_EPACK_PRINT_F01`).
 
 ---
 
@@ -424,10 +422,8 @@ Every table is read **once per run** for all packing lists (FOR ALL ENTRIES).
 | 2 | Tables `ZSD_EPACK_HDR` → `ZSD_EPACK_INV` → `ZSD_EPACK_DATA` → `ZSD_EPACK_LOG`, indexes `Z01`, lock object |
 | 3 | Structures, table types |
 | 4 | Message class, authorization object |
-| 5 | `ZIF_SD_EPACK`, `ZCX_SD_EPACK`, `ZCL_SD_EPACK_RULES`, `ZCL_SD_EPACK_UPLOAD` (run ABAP Unit) |
-| 6 | `ZCL_SD_EPACK_DATA`, `ZCL_SD_EPACK_OUTPUT`, `ZCL_SD_EPACK_STORE` |
 | 7 | Smart Style, SE78 graphic, both Smart Forms |
-| 8 | Program `ZSD_EPACK_PRINT`, transaction `ZSD_EPACK` |
+| 8 | Program `ZSD_EPACK_PRINT` with includes `_TOP`, `_SEL`, `_F01`, `_F02`; transaction `ZSD_EPACK` |
 
 Workbench request: everything above. Customizing request: `TVARVC`
 entry (or maintain it directly in each client), roles.

@@ -10,7 +10,7 @@ the repository samples, which are treated as the approved format (A28):
 * **with notify party** → `PackingList_90000081 Nabil Yemen_BySea - Rev.1.pdf`
 
 The forms contain **no SELECT and no ABAP logic other than conditions**.
-Every value is prepared by `ZCL_SD_EPACK_DATA` / `ZCL_SD_EPACK_RULES`.
+Every value is prepared by program `ZSD_EPACK_PRINT` (FORMs `BUILD_ONE`, `BUILD_PRINT_ITEMS`).
 
 **One call = one packing list.** `ZSD_EPACK_PRINT` calls the form once per
 packing list number. Each call gets only that packing list's header, texts
