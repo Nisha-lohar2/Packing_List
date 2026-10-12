@@ -78,7 +78,7 @@ The sample sheet has 77 line items (= PDF 90000081) with totals 4074 articles,
 
 ### 2.1 Header — from SAP
 
-| Output field | Logic | Source table / field | Derivation in `ZCL_SD_EPACK_DATA` |
+| Output field | Logic | Source table / field | Derivation (FORM in `ZSD_EPACK_PRINT_F01`) |
 |---|---|---|---|
 | Exporter name / address | B3 | `VBRK-BUKRS` → `T001-ADRNR` → `ADRC` `NAME1 STREET STR_SUPPL1 CITY1 POST_CODE1 REGION COUNTRY` | `READ_SAP_DATA` (T001, ADRC once), `EXPORTER_LINES` |
 | Exporter region text | B4 | `T005U-BEZEI` (LAND1 + BLAND = `ADRC-REGION`, SPRAS E) | **Logic says `T005S`**, which has no `BEZEI` field (§3) |
@@ -187,7 +187,7 @@ Each implemented assumption has an id (`Axx`) in the code. `docs/Development_Ass
    format: automatic / with NP / without NP   output: preview / print / PDF folder
    [ ] Validate only
           │
- 1  ZCL_SD_EPACK_UPLOAD
+ 1  FORM collect_packing_lists / parse_rows
    read_file (GUI_UPLOAD) → CL_FDT_XL_SPREADSHEET → rows
    check template (A1 "Sl.No.", M1 "Packing list no")
    split rows by column M (carry forward)   ──► tt_packing_list (sorted by PL no.)
@@ -196,7 +196,7 @@ Each implemented assumption has an id (`Axx`) in the code. `docs/Development_Ass
            FS weight rule, quantity plausibility        → messages per PL
    cross-check: invoice in two PLs → error in both
           │
- 2  ZCL_SD_EPACK_DATA->PREPARE  (bulk)
+ 2  FORM read_sap_data (bulk) + prepare_all / build_one
    READ_SAP_DATA: union of all invoices → VBRK, VBRP, TVARVC, KNVP, KNA1, T001,
      T001Z, J_1BBRANCH, ADRC, ADR6, ADR2, T005T, T005U, VBAK, VBKD, TVZBT, MAKT,
      MARC, T604N — each ONCE (FOR ALL ENTRIES), into HASHED / SORTED tables
@@ -208,13 +208,13 @@ Each implemented assumption has an id (`Axx`) in the code. `docs/Development_Ass
      partners via KNVP (B20/B26)                    → error if missing
      header + text blocks + items (B3 … B61)        → ts_result (status S/W/E)
           │
- 3  ZSD_EPACK_PRINT->OUTPUT_FORMS
+ 3  FORM output_forms
    LOOP over results (one per PL), skip status E
-     ZCL_SD_EPACK_OUTPUT->SEND: SSF_FUNCTION_MODULE_NAME + form call with
+     FORM send_form: SSF_FUNCTION_MODULE_NAME + form call with
      IS_HEADER / IT_TEXT / IT_ITEM of THIS PL only → preview / spool / PDF file
      error → logged on this PL, loop continues
           │
- 4  ZCL_SD_EPACK_STORE  (skipped in "Validate only")
+ 4  FORM save_packing_lists / write_log / finish_db  (skipped in "Validate only")
    SAVE_PACKING_LISTS: PLs with output = X → ZSD_EPACK_HDR / _INV / _DATA
      (lock, revision, array DELETE + INSERT, rollback on DB error)
    WRITE_LOG: one ZSD_EPACK_LOG row per PL + one for file-level errors
@@ -239,31 +239,30 @@ array operations. AUTHORITY-CHECK results are buffered per value.
 
 ## 6. Test plan
 
-`UT` = automated ABAP Unit (`ZCL_SD_EPACK_UPLOAD` 22 tests, `ZCL_SD_EPACK_RULES`
-28 tests). `IT` = integration test in QAS with real invoices. Expected results
+`MT` = manual test of the upload rules in DEV (no database data needed beyond the file). `IT` = integration test in QAS with real invoices. The program is procedural, so there are no ABAP Unit tests. Expected results
 marked **(Qxx)** depend on the answer to that question.
 
 | # | Scenario | Test data | Expected result | Type |
 |---|---|---|---|---|
-| T01 | One invoice, one PL | 1 PL, 1 invoice, 2 lines | 1 PL with 1 invoice, 2 items; 1 form; saved; log status S | UT `one_invoice_one_pl` + IT |
-| T02 | Several invoices, same PL | invoices in one cell "A, B" and in another row | 3 invoices on the PL; header from SAP identical for all; 1 form | UT `several_invoices_one_pl` + IT |
-| T03 | Several PLs in one file | PL 90000014 rows + PL 90000081 rows | 2 results, **2 separate forms** (2 previews / 2 spool requests / 2 PDF files), 2 log rows | UT `several_pls_in_one_file` + IT |
-| T04 | Items belong to their own PL only | parts PART-A* under PL A, PART-B* under PL B | form A shows only PART-A*, form B only PART-B* | UT `items_never_cross_pls` + IT |
-| T05 | Several line items / merged groups | full `Example_90000081` sheet (77 lines) | 77 rows; Articles / weights on the first line of each group; totals 4074 / 12146 / 116323.800 / 115386.780; text "(Total 4074 Bundles)" | UT rules tests + IT, compare with PDF 90000081 |
-| T06 | Two package types, two HSN | Tarmac data (sample 90000014) | headings "PP LOW NOISE PIPES … 3917 2390", "… FITTINGS … 3917 4000"; "2342 <=Loose Pipes", "1073 <=Boxes"; "(Total 2342 Loose Pipes + 1073 Boxes = 3415 Packages)" | UT `print_rows_heading_subtotal` + IT |
-| T07 | Duplicate invoice numbers | same invoice in 2 rows of a PL | counted once, info 056, no error | UT `duplicate_invoice_once` |
-| T08 | Same invoice in two PLs | invoice under PL A and PL B | error 058 on both, no form for either **(Q02)** | UT `invoice_in_two_pls_rejected` |
-| T09 | Invalid invoice token | "INV-X" | error 018, no form for that PL | UT `invalid_invoice_rejected` |
+| T01 | One invoice, one PL | 1 PL, 1 invoice, 2 lines | 1 PL with 1 invoice, 2 items; 1 form; saved; log status S | MT + IT |
+| T02 | Several invoices, same PL | invoices in one cell "A, B" and in another row | 3 invoices on the PL; header from SAP identical for all; 1 form | MT + IT |
+| T03 | Several PLs in one file | PL 90000014 rows + PL 90000081 rows | 2 results, **2 separate forms** (2 previews / 2 spool requests / 2 PDF files), 2 log rows | MT + IT |
+| T04 | Items belong to their own PL only | parts PART-A* under PL A, PART-B* under PL B | form A shows only PART-A*, form B only PART-B* | MT + IT |
+| T05 | Several line items / merged groups | full `Example_90000081` sheet (77 lines) | 77 rows; Articles / weights on the first line of each group; totals 4074 / 12146 / 116323.800 / 115386.780; text "(Total 4074 Bundles)" | MT + IT, compare with PDF 90000081 |
+| T06 | Two package types, two HSN | Tarmac data (sample 90000014) | headings "PP LOW NOISE PIPES … 3917 2390", "… FITTINGS … 3917 4000"; "2342 <=Loose Pipes", "1073 <=Boxes"; "(Total 2342 Loose Pipes + 1073 Boxes = 3415 Packages)" | MT + IT |
+| T07 | Duplicate invoice numbers | same invoice in 2 rows of a PL | counted once, info 056, no error | MT |
+| T08 | Same invoice in two PLs | invoice under PL A and PL B | error 058 on both, no form for either **(Q02)** | MT |
+| T09 | Invalid invoice token | "INV-X" | error 018, no form for that PL | MT |
 | T10 | Invoice not in SAP | 0099999999 | error 008, no form; other PLs printed | IT |
 | T11 | Cancelled invoice | cancelled billing doc | error 009 | IT |
-| T12 | Missing invoice / PL date | empty L or N | error 017 | UT `missing_invoice_rejected`, `missing_pl_date_rejected` |
-| T13 | PL without line items | header row only | error 036, no form; other PL printed | UT `pl_without_items_rejected` + IT |
-| T14 | Rows above the first PL no. | data row before column M is filled | file-level error 055; the rows are ignored | UT `rows_before_first_pl` |
-| T15 | No PL number at all | column M empty | error 059, nothing printed, log row | UT `no_pl_number_in_file` + IT |
-| T16 | Wrong / empty file | other layout; heading only | error 016 / 036 | UT `wrong_template_rejected`, `empty_file_rejected` |
-| T17 | Header conflict inside a PL | POL differs between rows of a PL | error 020; different POL in **different** PLs is fine | UT `header_conflict_in_pl`, `header_differs_between_pls` |
-| T18 | Duplicate rows | identical row twice / same Sl.No. with other values | warning 057, counted once / error 021 **(Q03)** | UT `exact_duplicate_row_ignored`, `conflicting_sl_no_rejected` |
-| T19 | GW < NW | one group 100 < 101 | message 001 (exact FS text) + 002, **no form** for this PL, others printed | UT `weight_error_found_in_upload`, rules tests + IT |
+| T12 | Missing invoice / PL date | empty L or N | error 017 | MT |
+| T13 | PL without line items | header row only | error 036, no form; other PL printed | MT + IT |
+| T14 | Rows above the first PL no. | data row before column M is filled | file-level error 055; the rows are ignored | MT |
+| T15 | No PL number at all | column M empty | error 059, nothing printed, log row | MT + IT |
+| T16 | Wrong / empty file | other layout; heading only | error 016 / 036 | MT |
+| T17 | Header conflict inside a PL | POL differs between rows of a PL | error 020; different POL in **different** PLs is fine | MT |
+| T18 | Duplicate rows | identical row twice / same Sl.No. with other values | warning 057, counted once / error 021 **(Q03)** | MT |
+| T19 | GW < NW | one group 100 < 101 | message 001 (exact FS text) + 002, **no form** for this PL, others printed | MT + IT |
 | T20 | Invoices of one PL disagree | 2 invoices with different payment terms | error 011, no form **(Q04)** | IT |
 | T21 | No KNVP ship-to / several ship-to | customer without WE / with 2 WE | error 042 / warning 060, default partner used **(Q07)** | IT |
 | T22 | Header data per Logic sheet | 1 PL against SE16 values | exporter = T001/ADRC; GST = J_1BBRANCH; CIN = T001Z ZCIN; IEC = ADRC-BUILDING; order no. = quotation VBKD-BSTKD/BSTDK; parties = KNVP→KNA1→ADRC/ADR6/ADR2; goods = VBRP→MARC→T604N clubbed; payment = TVZBT; Incoterms = INCO1 INCO2 | IT |
@@ -279,8 +278,8 @@ marked **(Qxx)** depend on the answer to that question.
 | T32 | Reprint saved | option "Saved packing lists" by invoice | PL found through its invoice, printed with all its invoices (info 006), print stamp set for print / PDF | IT |
 | T33 | Authorization | user without `ZSD_EPACK` 04 / `V_VBRK_VKO` / 01 | error 012, no form / form printed but not saved (warning 012) **(Q14)** | IT |
 | T34 | Volume | 20 PLs × 100 lines, 100 invoices | runtime dominated by form output; SQL trace shows 19 data SELECTs | IT (ST05) |
-| T36 | Business sample file | `test_data/Sample_data_ABAP.xlsx` | 1 PL (90000088), 3 invoices, 9 items, 3 packages; totals 120 / 884 / 1527.000 / 1423.000; with-NP form; 7 warnings 029 — see `test_data/Sample_data_ABAP_Expected_Results.md` | UT `sample_file_layout_is_read`, `repeated_values_one_package` + IT |
-| T37 | Placeholder text | "Fetch from logic" in H.S Code | HSN from material master | UT `placeholder_text_is_empty` |
+| T36 | Business sample file | `test_data/Sample_data_ABAP.xlsx` | 1 PL (90000088), 3 invoices, 9 items, 3 packages; totals 120 / 884 / 1527.000 / 1423.000; with-NP form; 7 warnings 029 — see `test_data/Sample_data_ABAP_Expected_Results.md` | MT + IT |
+| T37 | Placeholder text | "Fetch from logic" in H.S Code | HSN from material master | MT |
 | T35 | Regression | billing output, VF03, other `ZSD_*` objects | unchanged — no SAP object modified | IT |
 
 ---
@@ -289,13 +288,9 @@ marked **(Qxx)** depend on the answer to that question.
 
 | Object | Type | Status in this delivery |
 |---|---|---|
-| `ZSD_EPACK_PRINT` (T-code `ZSD_EPACK`) | Report | **Reworked**: Excel upload → one form per PL → save + log |
-| `ZCL_SD_EPACK_UPLOAD` + test class | Class | **Reworked**: parser with no DB access, several PLs per file, columns found by heading, 22 unit tests |
-| `ZCL_SD_EPACK_DATA` | Class | **Reworked**: bulk reads for all PLs, Logic-sheet derivations (KNVP partners, Incoterm codes, strict B11/B42) |
-| `ZCL_SD_EPACK_STORE` | Class | **New**: save to Z tables, log table |
-| `ZCL_SD_EPACK_OUTPUT` | Class | Extended: result list, output result for preview |
-| `ZIF_SD_EPACK` | Interface | Extended: PL list / result types, status, source |
-| `ZCL_SD_EPACK_RULES` + tests, `ZCX_SD_EPACK` | Class | Reused unchanged |
+| `ZSD_EPACK_PRINT` (T-code `ZSD_EPACK`) | Report | **Procedural**: Excel upload → one form per PL → save + log |
+| `ZSD_EPACK_PRINT_TOP` / `_SEL` / `_F01` / `_F02` | Includes | Types and data / selection screen / main FORMs / helper FORMs |
+| `ZCL_SD_EPACK_*`, `ZIF_SD_EPACK`, `ZCX_SD_EPACK` | Classes, interface | **Withdrawn**: replaced by the includes (same behaviour) |
 | `ZSD_EPACK_LOG`, `ZSD_EPACK_STATUS` | Table, data element | **New** |
 | `ZSD_EPACK_HDR`, `ZSD_EPACK_INV`, `ZSD_EPACK_DATA`, structures, lock object | DDIC | Unchanged design |
 | Message class `ZSD_EPACK` | Messages | 055–067 new, 004 / 006 / 011 / 042 reworded, upload-only messages withdrawn |

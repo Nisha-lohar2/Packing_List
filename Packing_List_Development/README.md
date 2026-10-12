@@ -14,14 +14,11 @@ annexures stay in the repository root, unchanged:
 | `docs/Packing_List_Requirement_Analysis_and_Development_Approach.md` | Full requirement analysis of the FS, with 43 clarifications |
 | `docs/ZSD_EPACK_SmartForm_Specification.md` | Build instructions for the two Smart Forms, the style and the graphic |
 | `src/DDIC_and_Repository_Objects.md` | Tables (incl. log table `ZSD_EPACK_LOG`), structures, lock object, message class, authorization object, transaction |
-| `src/ZSD_EPACK_PRINT.prog.abap` | Report behind transaction `ZSD_EPACK` |
-| `src/ZIF_SD_EPACK.intf.abap` | Types and constants |
-| `src/ZCX_SD_EPACK.clas.abap` | Exception class |
-| `src/ZCL_SD_EPACK_UPLOAD.clas.abap` (+ `.testclasses.abap`) | Excel parser, split by packing list number, columns found by heading — 22 unit tests |
-| `src/ZCL_SD_EPACK_RULES.clas.abap` (+ `.testclasses.abap`) | Package groups, FS weight check, totals, formatting — 28 unit tests |
-| `src/ZCL_SD_EPACK_DATA.clas.abap` | Data retrieval per the Logic sheet, bulk reads, checks |
-| `src/ZCL_SD_EPACK_OUTPUT.clas.abap` | Smart Form call, PDF, result list |
-| `src/ZCL_SD_EPACK_STORE.clas.abap` | Save to Z tables, log |
+| `src/ZSD_EPACK_PRINT.prog.abap` | Report behind transaction `ZSD_EPACK` (procedural, no custom classes) |
+| `src/ZSD_EPACK_PRINT_TOP.prog.abap` | Include: types, constants, global data |
+| `src/ZSD_EPACK_PRINT_SEL.prog.abap` | Include: selection screen and its events |
+| `src/ZSD_EPACK_PRINT_F01.prog.abap` | Include: main routines — Excel upload and split by packing list, Logic-sheet data retrieval (bulk), one form per packing list, save, log, result list |
+| `src/ZSD_EPACK_PRINT_F02.prog.abap` | Include: helper routines — package groups, FS weight rule, totals, printed rows, formatting, parsing |
 | `templates/ZSD_EPACK_Upload_Template_v2.xlsx` | Upload template with instructions and a worked example (sample 90000081) |
 | `test_data/Sample_data_ABAP.xlsx` | Business sample upload file (packing list 90000088) |
 | `test_data/Sample_data_ABAP_Expected_Results.md` | Expected result of that file, and data points to check |
@@ -29,10 +26,9 @@ annexures stay in the repository root, unchanged:
 ## Build order in SAP
 
 1. DDIC objects, lock object, message class and authorization object, as in `src/DDIC_and_Repository_Objects.md` §10.
-2. `ZIF_SD_EPACK`, `ZCX_SD_EPACK`, `ZCL_SD_EPACK_RULES`, `ZCL_SD_EPACK_UPLOAD`, then run ABAP Unit.
-3. `ZCL_SD_EPACK_DATA`, `ZCL_SD_EPACK_OUTPUT`, `ZCL_SD_EPACK_STORE`.
-4. Smart Style, SE78 graphic and both Smart Forms, as in `docs/ZSD_EPACK_SmartForm_Specification.md`.
-5. Program `ZSD_EPACK_PRINT` and transaction `ZSD_EPACK`.
+2. Smart Style, SE78 graphic and both Smart Forms, as in `docs/ZSD_EPACK_SmartForm_Specification.md`.
+3. Program `ZSD_EPACK_PRINT` with its includes `_TOP`, `_SEL`, `_F01`, `_F02` (SE38), then transaction `ZSD_EPACK` (SE93).
+4. Test with `test_data/Sample_data_ABAP.xlsx` and the test plan in `docs/Packing_List_Report_Design.md` §6.
 
 **Status:** code complete but **not yet compiled or run in an SAP system**.
 Check the items marked *SAP-VERIFY* before activation. Open functional

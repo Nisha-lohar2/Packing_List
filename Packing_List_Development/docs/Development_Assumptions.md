@@ -1,6 +1,6 @@
 # WRICEF 102-B Export Packing List — development status and assumptions
 
-**Version 2.** This version covers the Excel-upload report `ZSD_EPACK`: one form per
+**Version 3 (procedural program).** This version covers the Excel-upload report `ZSD_EPACK`: one form per
 packing list, then saving and logging. The assumptions below are referenced in the source code as `Axx`.
 The open questions that decide them are in `Packing_List_Report_Design.md` §4 (`Qxx`).
 The requirement analysis with all 43 original clarifications is in
@@ -10,13 +10,11 @@ The requirement analysis with all 43 original clarifications is in
 
 | Deliverable | File | Status |
 |---|---|---|
-| Report (T-code `ZSD_EPACK`) | `src/ZSD_EPACK_PRINT.prog.abap` | Code complete |
-| Excel parser + 22 unit tests | `src/ZCL_SD_EPACK_UPLOAD.clas.abap`, `.testclasses.abap` | Code complete |
-| Data retrieval per Logic sheet (bulk) | `src/ZCL_SD_EPACK_DATA.clas.abap` | Code complete |
-| Business rules + 28 unit tests | `src/ZCL_SD_EPACK_RULES.clas.abap`, `.testclasses.abap` | Code complete |
-| Form output + result list | `src/ZCL_SD_EPACK_OUTPUT.clas.abap` | Code complete |
-| Save to Z tables + log | `src/ZCL_SD_EPACK_STORE.clas.abap` | Code complete |
-| Types / exception | `src/ZIF_SD_EPACK.intf.abap`, `src/ZCX_SD_EPACK.clas.abap` | Code complete |
+| Report (T-code `ZSD_EPACK`) — procedural, no custom classes | `src/ZSD_EPACK_PRINT.prog.abap` | Code complete |
+| Include: types, constants, global data | `src/ZSD_EPACK_PRINT_TOP.prog.abap` | Code complete |
+| Include: selection screen | `src/ZSD_EPACK_PRINT_SEL.prog.abap` | Code complete |
+| Include: upload, data retrieval, forms, save, log | `src/ZSD_EPACK_PRINT_F01.prog.abap` | Code complete |
+| Include: package groups, weight rule, totals, formatting | `src/ZSD_EPACK_PRINT_F02.prog.abap` | Code complete |
 | DDIC incl. log table, messages, auth | `src/DDIC_and_Repository_Objects.md` | Specification |
 | Smart Forms | `docs/ZSD_EPACK_SmartForm_Specification.md` | Build specification |
 | Design, mapping, test plan | `docs/Packing_List_Report_Design.md` | Done |
@@ -24,7 +22,9 @@ The requirement analysis with all 43 original clarifications is in
 
 **Not verified on a system.** No SAP system was available. The code has not been
 compiled or run. A static check confirmed balanced blocks, no DB statement inside a
-loop, and no untyped inline declarations. The upload rules were cross-checked offline against the
+loop, and that every PERFORM matches its FORM. The program is procedural (FORM routines,
+no custom classes). It therefore has no ABAP Unit tests: the former unit-test scenarios are
+manual tests in the test plan. The upload rules were cross-checked offline against the
 example sheet: 77 lines, totals 4074 / 12146 / 116323.800 / 115386.780, matching PDF 90000081.
 
 ## 2. Assumptions applied
