@@ -190,7 +190,7 @@ FORM parse_rows USING    it_rows          TYPE ty_row_tab
 
   TYPES: BEGIN OF ty_inv_pl,
            vbeln  TYPE vbeln_vf,
-           packno TYPE zsd_packno,
+           packno TYPE zsd_vbeln,
          END OF ty_inv_pl.
   DATA lt_inv_pl TYPE SORTED TABLE OF ty_inv_pl WITH NON-UNIQUE KEY vbeln.
 
@@ -427,7 +427,7 @@ FORM split_by_packing_list USING    it_rows     TYPE ty_row_tab
                            CHANGING ct_split    TYPE ty_pl_rows_tab
                                     ct_messages TYPE bapiret2_t.
 
-  DATA lv_current TYPE zsd_packno.
+  DATA lv_current TYPE zsd_vbeln.
   DATA lv_packno  TYPE string.
   DATA lv_col     TYPE string.
 
@@ -1381,7 +1381,7 @@ FORM goods_lines USING    is_pl    TYPE ty_packing_list
                  CHANGING ct_lines TYPE ty_text_tab.
 
   DATA lt_seen TYPE SORTED TABLE OF steuc WITH UNIQUE KEY table_line.
-  DATA lv_hsn  TYPE zsd_hsn.
+  DATA lv_hsn  TYPE zna_segment.
 
   PERFORM split_lines USING is_pl-header-zsd_hsn_desc CHANGING ct_lines.
   IF ct_lines IS NOT INITIAL.
@@ -1422,7 +1422,7 @@ FORM resolve_items USING    is_pl       TYPE ty_packing_list
   DATA lv_sn    TYPE i.
   DATA lv_matnr TYPE matnr.
   DATA lv_werks TYPE werks_d.
-  DATA lv_hsn   TYPE zsd_hsn.
+  DATA lv_hsn   TYPE zna_segment.
   DATA lv_steuc TYPE steuc.
   DATA lv_text  TYPE string.
   DATA lv_hsntx TYPE string.
@@ -1673,7 +1673,7 @@ ENDFORM.
 *&---------------------------------------------------------------------*
 *& Part No. = SAP material number (logic B58 "from STEP no 53")
 *&---------------------------------------------------------------------*
-FORM matnr_of USING    iv_partno TYPE zsd_partno
+FORM matnr_of USING    iv_partno TYPE zsd_debezei40
               CHANGING cv_matnr  TYPE matnr.
 
   CLEAR cv_matnr.
@@ -1952,7 +1952,7 @@ FORM show_result.
 
   TYPES: BEGIN OF ty_line,
            icon    TYPE icon_d,
-           packno  TYPE zsd_packno,
+           packno  TYPE zsd_vbeln,
            status  TYPE char1,
            form    TYPE fpname,
            inv     TYPE i,

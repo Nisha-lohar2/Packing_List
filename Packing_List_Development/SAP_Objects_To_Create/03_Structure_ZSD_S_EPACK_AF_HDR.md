@@ -8,7 +8,7 @@ breaks. Example values and the source of every field: `src/Adobe_Form_Interface_
 
 | Component | Typing method | Component type / built-in type | Length | Dec | Description / label |
 |---|---|---|---:|---:|---|
-| `PACKNO` | Data element | `ZSD_PACKNO` | | | Packing List No. |
+| `PACKNO` | Data element | `ZSD_VBELN` | | | Packing List No. |
 | `PACKDT` | Predefined type | `CHAR` | 10 | 0 | Date |
 | `FORMAT` | Predefined type | `CHAR` | 1 | 0 | — (controls layout) |
 | `NP_COUNT` | Predefined type | `INT1` | 3 | | — |
@@ -59,4 +59,4 @@ breaks. Example values and the source of every field: `src/Adobe_Form_Interface_
 | `TOT_NWT` | Predefined type | `CHAR` | 17 | 0 | Net Wt. KGS |
 | `DECLARATION` | Predefined type | `STRING` | | | Declaration : |
 
-**Total:** 50 components. Only `ZSD_PACKNO` (file 01) and the standard `XFELD` are data elements.
+**Total:** 50 components. Only `ZSD_VBELN` (existing) and the standard `XFELD` are data elements.

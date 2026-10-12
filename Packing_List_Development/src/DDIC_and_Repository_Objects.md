@@ -26,30 +26,42 @@ Header fields are repeated on every line-item row, as in the FS layout.
 
 ---
 
-## 1. Data elements — new
+## 1. Data elements — existing ones reused
 
-Data element name = field name (FS "Tech name").
+The program uses the **existing** data elements of S2A below (taken from the program
+version reviewed in the system). Field names stay as in the FS; only the data element changes.
 
-| Data element | Type | Len | Dec | Description |
-|---|---|---:|---:|---|
-| `ZSD_PACKNO` | CHAR, conversion `ALPHA` | 10 | | Packing list number |
-| `ZSD_SN` / `ZSD_INV_SN` | NUMC | 6 | | Sl.No. / Sr.No. INV |
-| `ZSD_ARTNO` | CHAR | 15 | | Article No. |
-| `ZSD_STD` / `ZSD_ART` / `ZSD_TART` | NUMC | 6 | | STD / Articles / Total Articles |
-| `ZSD_PARTNO` / `ZSD_MATDESC` | CHAR | 40 | | Part No. / Product description |
-| `ZSD_QTY` / `ZSD_GWT` / `ZSD_NWT` | QUAN | 13 | 3 | Quantity / Gross / Net weight |
-| `ZSD_HSN` | CHAR | 17 | | H.S. code |
-| `ZSD_PACKDT` / `ZSD_REF_DT` | DATS | 8 | | PL date / Buyer's ref. date |
-| `ZSD_EXPREF` | CHAR | 20 | | Exporter ref. (Technical detail: "Not Req – fetched from SAP"; not filled) |
-| `ZSD_PARTY_REF` | CHAR | 200 | | Buyer's reference no. |
-| `ZSD_CNTY_ORGN` | CHAR | 20 | | Country of origin |
-| `ZSD_NP` (for `ZSD_NP1`…`ZSD_NP5`) | `SSTRING` | 1333 | | Notify party (multi-line). FS: CHAR 200; the sample texts are longer (A19). |
-| `ZSD_PREC`, `ZSD_REC_PC`, `ZSD_POL`, `ZSD_POD`, `ZSD_PLD`, `ZSD_VSL_FLT` | CHAR | 30 | | Shipping fields |
-| `ZSD_MARK` / `ZSD_NOPACK` | `SSTRING` | 255 | | Marks / No. of packages (FS 30, multi-line) |
-| `ZSD_CONT` / `ZSD_HSN_DESC` / `ZSD_CMMT` | `SSTRING` | 1333 | | Containers / Description of goods / Commercial terms |
-| `ZSD_PL_DECL` / `ZSD_INV_DECL` | `STRING` | | | Declarations (FS CHAR 1500 exceeds the table limit) |
-| `ZSD_ADV_AMT` | CURR | 15 | 2 | Advance amount |
-| `ZSD_INVOICES` | `STRING` | | | All invoice numbers of the packing list (used for `VBRK_VBELN`) |
+| Field(s) | Data element (existing) |
+|---|---|
+| `ZSD_PACKNO` | `ZSD_VBELN` |
+| `ZSD_SN`, `ZSD_INV_SN` | `ZSERNO` |
+| `ZSD_ARTNO` | `ZCHAR15` |
+| `ZSD_STD`, `ZSD_ART`, `ZSD_TART` | `ZSQNO` |
+| `ZSD_PARTNO`, `ZSD_MATDESC` | `ZSD_DEBEZEI40` |
+| `ZSD_QTY` | `ZQTY` |
+| `ZSD_GWT` | `ZDE_GRWT` |
+| `ZSD_NWT` | `ZDE_NET_WT` |
+| `ZSD_HSN` | `ZNA_SEGMENT` |
+| `ZSD_PACKDT`, `ZSD_REF_DT` | `ZSD_DATE` |
+| `ZSD_EXPREF`, `ZSD_CNTY_ORGN` | `ZSD_UID` |
+| `ZSD_PARTY_REF` | `ZREF` |
+| `ZSD_PREC`, `ZSD_REC_PC`, `ZSD_POL`, `ZSD_POD`, `ZSD_PLD`, `ZSD_VSL_FLT` | `ZCHAR30` |
+| `ZSD_PL_DECL`, `ZSD_INV_DECL`, `VBRK_VBELN` | `Z_STRING` |
+| `ZSD_ADV_AMT` | `ZDE_AMT1` |
+
+Data elements kept with their own name — **create only if they do not exist** (check SE11):
+
+| Data element | Type | Len | Description |
+|---|---|---:|---|
+| `ZSD_NP` (for `ZSD_NP1`…`ZSD_NP5`) | `SSTRING` | 1333 | Notify party (multi-line) |
+| `ZSD_MARK` / `ZSD_NOPACK` | `SSTRING` | 255 | Marks / No. of packages |
+| `ZSD_CONT` / `ZSD_HSN_DESC` / `ZSD_CMMT` | `SSTRING` | 1333 | Containers / Description of goods / Commercial terms |
+
+> ⚠ Check in SE11: `ZNA_SEGMENT` must hold at least 9 characters (HSN printed as `3917 2390`);
+> `ZSERNO` / `ZSQNO` must be numeric or NUMC (used in arithmetic); `ZQTY`, `ZDE_GRWT`,
+> `ZDE_NET_WT` are QUAN and `ZDE_AMT1` CURR — the table needs their unit / currency reference
+> fields (§2). `ZSD_TART` (total articles) and `VBRK_VBELN` (all invoices, STRING) were not in the
+> program; they use `ZSQNO` and `Z_STRING` — change if other data elements fit better.
 
 ---
 
@@ -61,40 +73,40 @@ log data changes yes, table maintenance not allowed (written only by `ZSD_EPACK`
 | # | Field | Key | Data element | Logic sheet | Excel column (FS template) |
 |---|---|:---:|---|---|---|
 | 1 | `MANDT` | ✔ | `MANDT` | | |
-| 2 | `ZSD_PACKNO` | ✔ | `ZSD_PACKNO` | B9 | Packing list no |
-| 3 | `ZSD_SN` | ✔ | `ZSD_SN` | B47 | Sl.No. |
-| 4 | `VBRK_VBELN` | | `ZSD_INVOICES` (STRING) | input | SAP Invoice Number — all invoices, comma-separated |
-| 5 | `ZSD_INV_SN` | | `ZSD_INV_SN` | B48 | Sr.No. INV |
-| 6 | `ZSD_ARTNO` | | `ZSD_ARTNO` | B49 | Article No. |
-| 7 | `ZSD_STD` | | `ZSD_STD` | B50 | STD |
-| 8 | `ZSD_ART` | | `ZSD_ART` | B51 | Articles (first line of a package only) |
-| 9 | `ZSD_TART` | | `ZSD_TART` | B52 | Total Articles — calculated, same on every row |
-| 10 | `ZSD_PARTNO` | | `ZSD_PARTNO` | B53 | Part No. |
-| 11 | `ZSD_MATDESC` | | `ZSD_MATDESC` | B54 | Product Description (as uploaded) |
-| 12 | `ZSD_QTY` | | `ZSD_QTY` (ref. `ZSD_MEINS`) | B55 | Quantity |
-| 13 | `ZSD_GWT` | | `ZSD_GWT` (ref. `ZSD_GEWEI`) | B56 | Gross Wt. (first line of a package only) |
-| 14 | `ZSD_NWT` | | `ZSD_NWT` (ref. `ZSD_GEWEI`) | B57 | Net Wt. (first line of a package only) |
-| 15 | `ZSD_HSN` | | `ZSD_HSN` | B58 | H.S Code (as uploaded) |
-| 16 | `ZSD_PACKDT` | | `ZSD_PACKDT` | B10 | Packing list date |
-| 17 | `ZSD_EXPREF` | | `ZSD_EXPREF` | B11 | Exporter Ref (not filled) |
-| 18 | `ZSD_PARTY_REF` | | `ZSD_PARTY_REF` | B14 | Buyer's Reference No. |
-| 19 | `ZSD_REF_DT` | | `ZSD_REF_DT` | B14 | Buyer's Reference date |
-| 20 | `ZSD_CNTY_ORGN` | | `ZSD_CNTY_ORGN` | B16 | Country of origin |
+| 2 | `ZSD_PACKNO` | ✔ | `ZSD_VBELN` | B9 | Packing list no |
+| 3 | `ZSD_SN` | ✔ | `ZSERNO` | B47 | Sl.No. |
+| 4 | `VBRK_VBELN` | | `Z_STRING` | input | SAP Invoice Number — all invoices, comma-separated |
+| 5 | `ZSD_INV_SN` | | `ZSERNO` | B48 | Sr.No. INV |
+| 6 | `ZSD_ARTNO` | | `ZCHAR15` | B49 | Article No. |
+| 7 | `ZSD_STD` | | `ZSQNO` | B50 | STD |
+| 8 | `ZSD_ART` | | `ZSQNO` | B51 | Articles (first line of a package only) |
+| 9 | `ZSD_TART` | | `ZSQNO` | B52 | Total Articles — calculated, same on every row |
+| 10 | `ZSD_PARTNO` | | `ZSD_DEBEZEI40` | B53 | Part No. |
+| 11 | `ZSD_MATDESC` | | `ZSD_DEBEZEI40` | B54 | Product Description (as uploaded) |
+| 12 | `ZSD_QTY` | | `ZQTY` (ref. `ZSD_MEINS`) | B55 | Quantity |
+| 13 | `ZSD_GWT` | | `ZDE_GRWT` (ref. `ZSD_GEWEI`) | B56 | Gross Wt. (first line of a package only) |
+| 14 | `ZSD_NWT` | | `ZDE_NET_WT` (ref. `ZSD_GEWEI`) | B57 | Net Wt. (first line of a package only) |
+| 15 | `ZSD_HSN` | | `ZNA_SEGMENT` | B58 | H.S Code (as uploaded) |
+| 16 | `ZSD_PACKDT` | | `ZSD_DATE` | B10 | Packing list date |
+| 17 | `ZSD_EXPREF` | | `ZSD_UID` | B11 | Exporter Ref (not filled) |
+| 18 | `ZSD_PARTY_REF` | | `ZREF` | B14 | Buyer's Reference No. |
+| 19 | `ZSD_REF_DT` | | `ZSD_DATE` | B14 | Buyer's Reference date |
+| 20 | `ZSD_CNTY_ORGN` | | `ZSD_UID` | B16 | Country of origin |
 | 21–25 | `ZSD_NP1`…`ZSD_NP5` | | `ZSD_NP` | B31 | Notifier Party 1–5 |
-| 26 | `ZSD_PREC` | | `ZSD_PREC` | B33 | Pre-Carriage |
-| 27 | `ZSD_REC_PC` | | `ZSD_REC_PC` | B34 | Place of Receipt by Pre-carrier |
-| 28 | `ZSD_POL` | | `ZSD_POL` | B36 | Port of Loading |
-| 29 | `ZSD_POD` | | `ZSD_POD` | B37 | Port of Discharge |
-| 30 | `ZSD_PLD` | | `ZSD_PLD` | B38 | Place of Delivery |
+| 26 | `ZSD_PREC` | | `ZCHAR30` | B33 | Pre-Carriage |
+| 27 | `ZSD_REC_PC` | | `ZCHAR30` | B34 | Place of Receipt by Pre-carrier |
+| 28 | `ZSD_POL` | | `ZCHAR30` | B36 | Port of Loading |
+| 29 | `ZSD_POD` | | `ZCHAR30` | B37 | Port of Discharge |
+| 30 | `ZSD_PLD` | | `ZCHAR30` | B38 | Place of Delivery |
 | 31 | `ZSD_MARK` | | `ZSD_MARK` | B39 | Marks & Nos. |
-| 32 | `ZSD_VSL_FLT` | | `ZSD_VSL_FLT` | B35 | Vessel / Flight No. |
+| 32 | `ZSD_VSL_FLT` | | `ZCHAR30` | B35 | Vessel / Flight No. |
 | 33 | `ZSD_CONT` | | `ZSD_CONT` | B40 | Container No |
 | 34 | `ZSD_NOPACK` | | `ZSD_NOPACK` | B41 | No. of Packages |
 | 35 | `ZSD_HSN_DESC` | | `ZSD_HSN_DESC` | B42 | Description of goods |
-| 36 | `ZSD_PL_DECL` | | `ZSD_PL_DECL` | B61 | Declaration of Packing list |
-| 37 | `ZSD_ADV_AMT` | | `ZSD_ADV_AMT` (ref. `ZSD_WAERS`) | — | Advance amount received |
+| 36 | `ZSD_PL_DECL` | | `Z_STRING` | B61 | Declaration of Packing list |
+| 37 | `ZSD_ADV_AMT` | | `ZDE_AMT1` (ref. `ZSD_WAERS`) | — | Advance amount received |
 | 38 | `ZSD_CMMT` | | `ZSD_CMMT` | — | Commercial terms of invoice |
-| 39 | `ZSD_INV_DECL` | | `ZSD_INV_DECL` | — | Declaration of Invoice |
+| 39 | `ZSD_INV_DECL` | | `Z_STRING` | — | Declaration of Invoice |
 | 40 | `ZSD_MEINS` | | `MEINS` (value `ST`) | | unit reference for `ZSD_QTY` |
 | 41 | `ZSD_GEWEI` | | `GEWEI` (value `KG`) | | unit reference for weights |
 | 42 | `ZSD_WAERS` | | `WAERS` | | currency reference for `ZSD_ADV_AMT` |
@@ -182,7 +194,7 @@ examples and sources: **`src/Adobe_Form_Interface_Structures.md`**.
 | # | Object | Type | Transaction |
 |---|---|---|---|
 | 1 | `ZSD_EPACK` | Package | SE80 |
-| 2 | Data elements of §1 | Data elements | SE11 |
+| 2 | Data elements of §1 that do not exist yet (`ZSD_NP`, `ZSD_MARK`, `ZSD_NOPACK`, `ZSD_CONT`, `ZSD_HSN_DESC`, `ZSD_CMMT`) | Data elements | SE11 |
 | 3 | `ZSD_EPACK_DATA` | Transparent table — **the only Z table** (log of printed packing lists, FS) | SE11 |
 | 4 | `ZSD_S_EPACK_AF_HDR` | Structure — Adobe Form header | SE11 |
 | 5 | `ZSD_S_EPACK_AF_ITM` | Structure — Adobe Form item row | SE11 |

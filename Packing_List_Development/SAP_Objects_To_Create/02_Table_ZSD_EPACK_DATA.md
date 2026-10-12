@@ -16,44 +16,44 @@ A STRING cannot be a key field, therefore the key is `MANDT` + `ZSD_PACKNO` + `Z
 | Field | Key | Data element | Currency / quantity reference | Content |
 |---|:---:|---|---|---|
 | `MANDT` | ✔ | `MANDT` |  |  |
-| `ZSD_PACKNO` | ✔ | `ZSD_PACKNO` |  | Packing list no |
-| `ZSD_SN` | ✔ | `ZSD_SN` |  | Sl.No. |
-| `VBRK_VBELN` |  | `ZSD_INVOICES` (STRING) |  | SAP Invoice Number — all invoices, comma-separated |
-| `ZSD_INV_SN` |  | `ZSD_INV_SN` |  | Sr.No. INV |
-| `ZSD_ARTNO` |  | `ZSD_ARTNO` |  | Article No. |
-| `ZSD_STD` |  | `ZSD_STD` |  | STD |
-| `ZSD_ART` |  | `ZSD_ART` |  | Articles (first line of a package only) |
-| `ZSD_TART` |  | `ZSD_TART` |  | Total Articles — calculated, same on every row |
-| `ZSD_PARTNO` |  | `ZSD_PARTNO` |  | Part No. |
-| `ZSD_MATDESC` |  | `ZSD_MATDESC` |  | Product Description (as uploaded) |
-| `ZSD_QTY` |  | `ZSD_QTY` | `ZSD_MEINS` | Quantity |
-| `ZSD_GWT` |  | `ZSD_GWT` | `ZSD_GEWEI` | Gross Wt. (first line of a package only) |
-| `ZSD_NWT` |  | `ZSD_NWT` | `ZSD_GEWEI` | Net Wt. (first line of a package only) |
-| `ZSD_HSN` |  | `ZSD_HSN` |  | H.S Code (as uploaded) |
-| `ZSD_PACKDT` |  | `ZSD_PACKDT` |  | Packing list date |
-| `ZSD_EXPREF` |  | `ZSD_EXPREF` |  | Exporter Ref (not filled) |
-| `ZSD_PARTY_REF` |  | `ZSD_PARTY_REF` |  | Buyer's Reference No. |
-| `ZSD_REF_DT` |  | `ZSD_REF_DT` |  | Buyer's Reference date |
-| `ZSD_CNTY_ORGN` |  | `ZSD_CNTY_ORGN` |  | Country of origin |
+| `ZSD_PACKNO` | ✔ | `ZSD_VBELN` |  | Packing list no |
+| `ZSD_SN` | ✔ | `ZSERNO` |  | Sl.No. |
+| `VBRK_VBELN` |  | `Z_STRING` |  | SAP Invoice Number — all invoices, comma-separated |
+| `ZSD_INV_SN` |  | `ZSERNO` |  | Sr.No. INV |
+| `ZSD_ARTNO` |  | `ZCHAR15` |  | Article No. |
+| `ZSD_STD` |  | `ZSQNO` |  | STD |
+| `ZSD_ART` |  | `ZSQNO` |  | Articles (first line of a package only) |
+| `ZSD_TART` |  | `ZSQNO` |  | Total Articles — calculated, same on every row |
+| `ZSD_PARTNO` |  | `ZSD_DEBEZEI40` |  | Part No. |
+| `ZSD_MATDESC` |  | `ZSD_DEBEZEI40` |  | Product Description (as uploaded) |
+| `ZSD_QTY` |  | `ZQTY` | `ZSD_MEINS` | Quantity |
+| `ZSD_GWT` |  | `ZDE_GRWT` | `ZSD_GEWEI` | Gross Wt. (first line of a package only) |
+| `ZSD_NWT` |  | `ZDE_NET_WT` | `ZSD_GEWEI` | Net Wt. (first line of a package only) |
+| `ZSD_HSN` |  | `ZNA_SEGMENT` |  | H.S Code (as uploaded) |
+| `ZSD_PACKDT` |  | `ZSD_DATE` |  | Packing list date |
+| `ZSD_EXPREF` |  | `ZSD_UID` |  | Exporter Ref (not filled) |
+| `ZSD_PARTY_REF` |  | `ZREF` |  | Buyer's Reference No. |
+| `ZSD_REF_DT` |  | `ZSD_DATE` |  | Buyer's Reference date |
+| `ZSD_CNTY_ORGN` |  | `ZSD_UID` |  | Country of origin |
 | `ZSD_NP1` | | `ZSD_NP` | | Notify party 1 |
 | `ZSD_NP2` | | `ZSD_NP` | | Notify party 2 |
 | `ZSD_NP3` | | `ZSD_NP` | | Notify party 3 |
 | `ZSD_NP4` | | `ZSD_NP` | | Notify party 4 |
 | `ZSD_NP5` | | `ZSD_NP` | | Notify party 5 |
-| `ZSD_PREC` |  | `ZSD_PREC` |  | Pre-Carriage |
-| `ZSD_REC_PC` |  | `ZSD_REC_PC` |  | Place of Receipt by Pre-carrier |
-| `ZSD_POL` |  | `ZSD_POL` |  | Port of Loading |
-| `ZSD_POD` |  | `ZSD_POD` |  | Port of Discharge |
-| `ZSD_PLD` |  | `ZSD_PLD` |  | Place of Delivery |
+| `ZSD_PREC` |  | `ZCHAR30` |  | Pre-Carriage |
+| `ZSD_REC_PC` |  | `ZCHAR30` |  | Place of Receipt by Pre-carrier |
+| `ZSD_POL` |  | `ZCHAR30` |  | Port of Loading |
+| `ZSD_POD` |  | `ZCHAR30` |  | Port of Discharge |
+| `ZSD_PLD` |  | `ZCHAR30` |  | Place of Delivery |
 | `ZSD_MARK` |  | `ZSD_MARK` |  | Marks & Nos. |
-| `ZSD_VSL_FLT` |  | `ZSD_VSL_FLT` |  | Vessel / Flight No. |
+| `ZSD_VSL_FLT` |  | `ZCHAR30` |  | Vessel / Flight No. |
 | `ZSD_CONT` |  | `ZSD_CONT` |  | Container No |
 | `ZSD_NOPACK` |  | `ZSD_NOPACK` |  | No. of Packages |
 | `ZSD_HSN_DESC` |  | `ZSD_HSN_DESC` |  | Description of goods |
-| `ZSD_PL_DECL` |  | `ZSD_PL_DECL` |  | Declaration of Packing list |
-| `ZSD_ADV_AMT` |  | `ZSD_ADV_AMT` | `ZSD_WAERS` | Advance amount received |
+| `ZSD_PL_DECL` |  | `Z_STRING` |  | Declaration of Packing list |
+| `ZSD_ADV_AMT` |  | `ZDE_AMT1` | `ZSD_WAERS` | Advance amount received |
 | `ZSD_CMMT` |  | `ZSD_CMMT` |  | Commercial terms of invoice |
-| `ZSD_INV_DECL` |  | `ZSD_INV_DECL` |  | Declaration of Invoice |
+| `ZSD_INV_DECL` |  | `Z_STRING` |  | Declaration of Invoice |
 | `ZSD_MEINS` |  | `MEINS` |  | unit reference for `ZSD_QTY` |
 | `ZSD_GEWEI` |  | `GEWEI` |  | unit reference for weights |
 | `ZSD_WAERS` |  | `WAERS` |  | currency reference for `ZSD_ADV_AMT` |

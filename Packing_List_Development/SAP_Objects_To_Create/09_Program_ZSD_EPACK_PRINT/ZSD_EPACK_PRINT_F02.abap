@@ -116,7 +116,7 @@ ENDFORM.
 *&---------------------------------------------------------------------*
 *& Excel lines -> table rows with article / weight groups
 *&---------------------------------------------------------------------*
-FORM build_items USING    iv_packno   TYPE zsd_packno
+FORM build_items USING    iv_packno   TYPE zsd_vbeln
                           it_lines    TYPE ty_upload_line_tab
                  CHANGING ct_items    TYPE ty_item_tab
                           ct_messages TYPE bapiret2_t.
@@ -124,8 +124,8 @@ FORM build_items USING    iv_packno   TYPE zsd_packno
   DATA lv_art_grp  TYPE i.
   DATA lv_wt_grp   TYPE i.
   DATA lv_pkg_type TYPE char20.
-  DATA lv_prev_sn  TYPE zsd_sn.
-  DATA lt_seen_sn  TYPE SORTED TABLE OF zsd_sn WITH UNIQUE KEY table_line.
+  DATA lv_prev_sn  TYPE zserno.
+  DATA lt_seen_sn  TYPE SORTED TABLE OF zserno WITH UNIQUE KEY table_line.
   DATA ls_item     TYPE ty_item.
 
   CLEAR ct_items.
@@ -233,9 +233,9 @@ ENDFORM.
 FORM check_quantities USING    it_items    TYPE ty_item_tab
                       CHANGING ct_messages TYPE bapiret2_t.
 
-  DATA lv_articles TYPE zsd_art.
+  DATA lv_articles TYPE zsqno.
   DATA lv_prev_grp TYPE i.
-  DATA lv_expected TYPE zsd_qty.
+  DATA lv_expected TYPE zqty.
   DATA lv_qty      TYPE string.
   DATA lv_sn       TYPE i.
   DATA lv_std      TYPE i.
@@ -327,7 +327,7 @@ FORM build_print_items USING    it_items    TYPE ty_item_tab
                                 it_headings TYPE ty_hsn_heading_tab
                        CHANGING ct_print    TYPE zsd_tt_epack_af_itm.
 
-  DATA lv_prev_hsn  TYPE zsd_hsn VALUE '#'.
+  DATA lv_prev_hsn  TYPE zna_segment VALUE '#'.
   DATA lv_prev_art  TYPE i.
   DATA lv_prev_wt   TYPE i.
   DATA lv_run_type  TYPE char20.
@@ -467,7 +467,7 @@ FORM heading_for_hsn USING    iv_hsn      TYPE csequence
 
   DATA lv_hsn_digits  TYPE string.
   DATA lv_line_digits TYPE string.
-  DATA lv_hsn_fmt     TYPE zsd_hsn.
+  DATA lv_hsn_fmt     TYPE zna_segment.
 
   PERFORM digits_only USING iv_hsn CHANGING lv_hsn_digits.
 
@@ -494,7 +494,7 @@ ENDFORM.
 *& "39172390" -> "3917 2390" (format of the samples)
 *&---------------------------------------------------------------------*
 FORM format_hsn USING    iv_hsn TYPE csequence
-                CHANGING cv_hsn TYPE zsd_hsn.
+                CHANGING cv_hsn TYPE zna_segment.
 
   DATA(lv_text) = replace( val = condense( CONV string( iv_hsn ) ) sub = ` ` with = `` occ = 0 ).
 
@@ -507,13 +507,13 @@ FORM format_hsn USING    iv_hsn TYPE csequence
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-FORM format_weight USING    iv_weight TYPE zsd_gwt
+FORM format_weight USING    iv_weight TYPE zde_grwt
                    CHANGING cv_text   TYPE string.
   cv_text = |{ iv_weight DECIMALS = 3 }|.
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-FORM format_quantity USING    iv_quantity TYPE zsd_qty
+FORM format_quantity USING    iv_quantity TYPE zqty
                      CHANGING cv_text     TYPE string.
   IF frac( iv_quantity ) = 0.
     cv_text = |{ CONV i( iv_quantity ) }|.

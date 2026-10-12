@@ -5,7 +5,7 @@ Create the objects in the order of the files 01 → 09. Activate after each step
 
 | File | Object(s) | Transaction |
 |---|---|---|
-| `01_Data_Elements.md` | Data elements `ZSD_*` (only the missing ones) | SE11 |
+| `01_Data_Elements.md` | Existing data elements reused; only 6 `ZSD_*` to create if missing | SE11 |
 | `02_Table_ZSD_EPACK_DATA.md` | Table `ZSD_EPACK_DATA` (the only Z table — log) | SE11 |
 | `03_Structure_ZSD_S_EPACK_AF_HDR.md` | Structure — Adobe Form header | SE11 |
 | `04_Structure_ZSD_S_EPACK_AF_ITM.md` | Structure — Adobe Form item row | SE11 |
@@ -19,9 +19,10 @@ Create the objects in the order of the files 01 → 09. Activate after each step
 ## Rules applied
 
 * **Only Z objects** are created. Standard objects (`MANDT`, `MEINS`, `GEWEI`, `WAERS`, `XFELD`,
-  domain `VBELN` …) are only referenced.
-* **No domains.** Data elements use predefined types; `ZSD_PACKNO` uses the standard domain
-  `VBELN` (CHAR 10 with conversion `ALPHA`), so no Z domain is needed.
+  …) are only referenced.
+* **No domains, existing data elements reused** (`ZSD_VBELN`, `ZSERNO`, `ZSQNO`, `ZQTY`, `ZDE_GRWT`,
+  `ZDE_NET_WT`, `ZNA_SEGMENT`, `ZSD_DATE`, `ZSD_UID`, `ZREF`, `ZCHAR15`, `ZCHAR30`, `Z_STRING`, `ZDE_AMT1`,
+  `ZSD_DEBEZEI40`) — see file 01.
 * **Reuse first.** Before creating a data element, search in SE11 (F4 on "Data type", or
   table `DD04L`) for an existing `Z*` data element with the **same type, length and decimals**.
   If one exists, do not create the new one — enter the existing name in the table / structure

@@ -53,7 +53,7 @@ Example values are from packing list 90000014.
 
 | # | Component | Type | Len | Label on the form | Example | Source |
 |---|---|---|---:|---|---|---|
-| 1 | `PACKNO` | DE `ZSD_PACKNO` | 10 | Packing List No. | `90000014` | B9 · Excel M |
+| 1 | `PACKNO` | DE `ZSD_VBELN` | 10 | Packing List No. | `90000014` | B9 · Excel M |
 | 2 | `PACKDT` | CHAR | 10 | Date | `27-05-2025` | B10 · Excel N (DD-MM-YYYY) |
 | 3 | `FORMAT` | CHAR | 1 | — (controls layout) | `O` | `N` = notify parties maintained → notify-party section shown; `O` = hidden (FS 1.1, A05) |
 | 4 | `NP_COUNT` | INT1 | 3 | — | `0` | number of filled notify parties (0–5) |
