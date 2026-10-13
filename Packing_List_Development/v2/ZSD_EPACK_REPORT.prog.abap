@@ -1,24 +1,26 @@
 *&---------------------------------------------------------------------*
 *& Report ZSD_EPACK_REPORT
 *&---------------------------------------------------------------------*
-*& WRICEF 102-B  Export consolidated packing list - data report
+*& WRICEF 102-B  Export consolidated packing list
 *&
-*& Input : sales orders (S_VBELN) and the packing list Excel file
-*&         (layout of Sample_data_ABAP.xlsx, columns A..AK, row 1 =
-*&         headings). The Excel file is the ZSD_PACKNO data source of the
-*&         FS logic sheet ("Pass ZSD_PACKNO get ...").
-*& Output: one ALV row per packing list line item with all header,
-*&         sold-to, ship-to, notifier, shipment, goods, line item and
-*&         footer fields of the logic sheet (Logic_sheet1.xlsx).
+*& Process (two steps, same program):
+*&  STEP 1 - Sales order(s) entered, no file:
+*&           the data whose logic is given in the FS logic sheet is read
+*&           from SAP and shown in an ALV grid with ALL columns of the
+*&           packing list (columns without SAP logic stay empty). One row
+*&           per billing document item of the sales orders.
+*&           The user exports the ALV to Excel (standard ALV function
+*&           "Export -> Spreadsheet") and fills the remaining columns
+*&           (packing list no., notifiers, shipment data, line items ...).
+*&  STEP 2 - The filled Excel file is uploaded (file field):
+*&           the file is read back into the same structure (columns found
+*&           by their headings) and the Adobe Form ZSD_EPACK_AF is printed
+*&           once per packing list number with exactly this data.
 *&
-*& Relationship (validated, see Assumptions_v2.md):
-*&   sales order VBAK-VBELN = VBRP-AUBEL  ->  billing documents VBRK
-*&   packing list (Excel) column B "SAP Invoice Number" = VBRK-VBELN
-*&   -> only packing lists whose invoices belong to the entered sales
-*&      orders are reported.
-*&
-*& All database reads are bulk reads (JOIN / FOR ALL ENTRIES) done once
-*& before the output is built. No SELECT and no SORT inside a loop.
+*& Relationship sales order -> billing document: VBRP-AUBEL = VBAK-VBELN.
+*& All database reads are bulk reads (JOIN / FOR ALL ENTRIES) before the
+*& output is built. No SELECT and no SORT inside a loop.
+*& Assumptions: v2/Assumptions_v2.md
 *&---------------------------------------------------------------------*
 REPORT zsd_epack_report.
 
@@ -26,67 +28,27 @@ REPORT zsd_epack_report.
 * Constants
 *----------------------------------------------------------------------*
 CONSTANTS:
-  gc_langu   TYPE spras VALUE 'E',          " T604N "SPRAS = EN", texts
-  gc_land_in TYPE land1 VALUE 'IN',         " T604N "LAND1 = IN"
-  gc_cin     TYPE t001z-party VALUE 'ZCIN',       " T001Z "PARTY = ZCIN"
+  gc_langu    TYPE spras VALUE 'E',              " T604N "SPRAS = EN", texts
+  gc_land_in  TYPE land1 VALUE 'IN',             " T604N "LAND1 = IN"
+  gc_cin      TYPE t001z-party VALUE 'ZCIN',     " T001Z "PARTY = ZCIN"
   " Logic sheet "PARVW = SP / SH" = sold-to / ship-to party. Stored in
   " KNVP with the internal codes AG / WE (A4).
   gc_parvw_sp TYPE parvw VALUE 'AG',
   gc_parvw_sh TYPE parvw VALUE 'WE',
-  gc_tel      TYPE adr2-r3_user VALUE '1',   " ADR2-R3_USER telephone
-  gc_mob      TYPE adr2-r3_user VALUE '3'.   " ADR2-R3_USER mobile
+  gc_tel      TYPE adr2-r3_user VALUE '1',       " ADR2-R3_USER telephone
+  gc_mob      TYPE adr2-r3_user VALUE '3',       " ADR2-R3_USER mobile
+  " Step 2: Adobe Form and output device (print preview, printable)
+  gc_form     TYPE fpname    VALUE 'ZSD_EPACK_AF',
+  gc_dest     TYPE rspopname VALUE 'LP01'.
 
 *----------------------------------------------------------------------*
-* Types - Excel (ZSD_PACKNO data), columns A..AK, all as read
-*----------------------------------------------------------------------*
-TYPES:
-  BEGIN OF ty_xl,
-    row       TYPE i,
-    packno    TYPE string,   " A  Packing list Number      ZSD_PACKNO
-    invoices  TYPE string,   " B  SAP Invoice Number(s)
-    sn        TYPE string,   " C  Sl.No.                   ZSD_SN
-    inv_sn    TYPE string,   " D  Sr.No. INV               ZSD_INV_SN
-    artno     TYPE string,   " E  Article No.              ZSD_ARTNO
-    std       TYPE string,   " F  STD                      ZSD_STD
-    art       TYPE string,   " G  Articles                 ZSD_ART
-    partno    TYPE string,   " H  Part No.                 ZSD_PARTNO
-    matdesc   TYPE string,   " I  Product Description      ZSD_MATDESC
-    qty       TYPE string,   " J  Quantity Pcs             ZSD_QTY
-    gwt       TYPE string,   " K  Gross Wt. KGS            ZSD_GWT
-    nwt       TYPE string,   " L  Net Wt. KGS              ZSD_NWT
-    hsn       TYPE string,   " M  H.S Code                 ZSD_HSN
-    packdt    TYPE string,   " N  Packing list date        ZSD_PACKDT
-    expref    TYPE string,   " O  Exporter Ref (not used - B11 from ADRC)
-    party_ref TYPE string,   " P  Buyer's Reference No.    ZSD_PARTY_REF
-    ref_dt    TYPE string,   " Q  Buyer's Reference date   ZSD_REF_DT
-    cnty_orgn TYPE string,   " R  Country of origin        ZSD_CNTY_ORGN
-    np1       TYPE string,   " S  Notifier Party1          ZSD_NP1
-    np2       TYPE string,   " T  Notifier Party2          ZSD_NP2
-    np3       TYPE string,   " U  Notifier Party3          ZSD_NP3
-    np4       TYPE string,   " V  Notifier Party4          ZSD_NP4
-    np5       TYPE string,   " W  Notifier Party5          ZSD_NP5
-    prec      TYPE string,   " X  Pre-Carriage             ZSD_PREC
-    rec_pc    TYPE string,   " Y  Place of Receipt         ZSD_REC_PC
-    pol       TYPE string,   " Z  Port of Loading          ZSD_POL
-    pod       TYPE string,   " AA Port of Discharge        ZSD_POD
-    pld       TYPE string,   " AB Place of Delivery        ZSD_PLD
-    mark      TYPE string,   " AC Marks & Nos.             ZSD_MARK
-    vsl_flt   TYPE string,   " AD Vessel / Flight No.      ZSD_VSL_FLT
-    cont      TYPE string,   " AE Container No             ZSD_CONT
-    nopack    TYPE string,   " AF No. of Packages          ZSD_NOPACK
-    goods     TYPE string,   " AG Description of goods (not used - B42)
-    decl      TYPE string,   " AH Declaration of PL        ZSD_DECL
-  END OF ty_xl,
-  ty_xl_tab TYPE STANDARD TABLE OF ty_xl WITH EMPTY KEY.
-
-*----------------------------------------------------------------------*
-* Types - final output (sequence of the logic sheet)
+* Types - packing list data = ALV columns = Excel columns (in this order)
 *----------------------------------------------------------------------*
 TYPES:
   BEGIN OF ty_out,
     " Reference
-    sales_orders  TYPE string,             " entered sales orders of the PL
-    invoices      TYPE string,             " billing documents of the PL
+    sales_orders  TYPE string,             " sales order of the row
+    invoices      TYPE string,             " billing document of the row
     " Header - Exporter (B3-B7)
     exp_name1     TYPE adrc-name1,
     exp_street    TYPE adrc-street,
@@ -100,14 +62,14 @@ TYPES:
     gstin         TYPE j_1bbranch-gstin,
     cin           TYPE t001z-paval,
     " Header (B9-B17)
-    packno        TYPE string,
-    packdt        TYPE d,
+    packno        TYPE string,             " ZSD_PACKNO - filled by user
+    packdt        TYPE d,                  " ZSD_PACKDT - filled by user
     iec           TYPE adrc-building,
     order_no      TYPE string,
     order_date    TYPE string,
-    buyer_ref     TYPE string,
-    buyer_ref_dt  TYPE d,
-    cnty_orgn     TYPE string,
+    buyer_ref     TYPE string,             " ZSD_PARTY_REF - by user
+    buyer_ref_dt  TYPE d,                  " ZSD_REF_DT    - by user
+    cnty_orgn     TYPE string,             " ZSD_CNTY_ORGN - by user
     cnty_dest     TYPE t005t-landx,
     " Sold-to / bill-to party (B20-B23)
     sp_kunnr      TYPE kunnr,
@@ -135,13 +97,13 @@ TYPES:
     sh_email      TYPE adr6-smtp_addr,
     sh_telephone  TYPE adr2-telnr_long,
     sh_mobile     TYPE adr2-telnr_long,
-    " Notifier parties (B31)
+    " Notifier parties (B31) - by user
     np1           TYPE string,
     np2           TYPE string,
     np3           TYPE string,
     np4           TYPE string,
     np5           TYPE string,
-    " Shipment (B33-B41)
+    " Shipment (B33-B41) - by user
     pre_carriage  TYPE string,
     place_receipt TYPE string,
     vessel_flight TYPE string,
@@ -157,7 +119,8 @@ TYPES:
     payment_term  TYPE tvzbt-vtext,
     inco1         TYPE vbrk-inco1,
     inco2         TYPE vbrk-inco2,
-    " Line item (B47-B58)
+    " Line item (B47-B58) - ZSD_PACKNO fields by user; part no.,
+    " description and HSN pre-filled from the billing item
     sn            TYPE i,
     inv_sn        TYPE i,
     article_no    TYPE string,
@@ -170,7 +133,7 @@ TYPES:
     gross_wt      TYPE p LENGTH 13 DECIMALS 3,
     net_wt        TYPE p LENGTH 13 DECIMALS 3,
     hsn           TYPE string,
-    " Footer (B61)
+    " Footer (B61) - by user
     declaration   TYPE string,
   END OF ty_out,
   ty_out_tab TYPE STANDARD TABLE OF ty_out WITH EMPTY KEY.
@@ -197,8 +160,6 @@ TYPES:
     inco2 TYPE vbrk-inco2,
   END OF ty_bill,
   ty_bill_tab TYPE SORTED TABLE OF ty_bill WITH UNIQUE KEY vbeln posnr,
-
-  ty_vbeln_tab TYPE SORTED TABLE OF vbeln_vf WITH UNIQUE KEY table_line,
 
   BEGIN OF ty_vbak,
     vbeln TYPE vbak-vbeln,
@@ -291,12 +252,12 @@ TYPES:
   ty_knvp_tab TYPE SORTED TABLE OF ty_knvp
               WITH NON-UNIQUE KEY kunnr vkorg vtweg spart parvw parza,
 
+  " One payment term can have several lines (ZTAGG) - non-unique key
   BEGIN OF ty_tvzbt,
     zterm TYPE tvzbt-zterm,
-    ztagg TYPE tvzbt-ztagg,
     vtext TYPE tvzbt-vtext,
   END OF ty_tvzbt,
-  ty_tvzbt_tab TYPE SORTED TABLE OF ty_tvzbt WITH UNIQUE KEY zterm ztagg,
+  ty_tvzbt_tab TYPE SORTED TABLE OF ty_tvzbt WITH NON-UNIQUE KEY zterm,
 
   BEGIN OF ty_marc,
     matnr TYPE marc-matnr,
@@ -317,23 +278,30 @@ TYPES:
   END OF ty_makt,
   ty_makt_tab TYPE HASHED TABLE OF ty_makt WITH UNIQUE KEY matnr,
 
-  BEGIN OF ty_partno,
-    partno TYPE string,
-    matnr  TYPE matnr,
-  END OF ty_partno,
-  ty_partno_tab TYPE HASHED TABLE OF ty_partno WITH UNIQUE KEY partno,
-
-  " Address block of a partner
+  " Partner and its address number
   BEGIN OF ty_party,
     kunnr TYPE kunnr,
     adrnr TYPE adrnr,
   END OF ty_party,
 
+  " Column heading <-> field of TY_OUT
+  BEGIN OF ty_label,
+    name TYPE lvc_fname,
+    text TYPE string,
+  END OF ty_label,
+  ty_label_tab TYPE STANDARD TABLE OF ty_label WITH EMPTY KEY,
+
+  BEGIN OF ty_colmap,
+    key  TYPE string,                  " normalized heading
+    name TYPE lvc_fname,               " '*' = ambiguous heading
+  END OF ty_colmap,
+  ty_colmap_tab TYPE HASHED TABLE OF ty_colmap WITH UNIQUE KEY key,
+
   " Message log
   BEGIN OF ty_log,
-    type   TYPE symsgty,
-    packno TYPE string,
-    text   TYPE string,
+    type TYPE symsgty,
+    ref  TYPE string,                  " sales order / invoice / PL no.
+    text TYPE string,
   END OF ty_log,
   ty_log_tab TYPE STANDARD TABLE OF ty_log WITH EMPTY KEY,
 
@@ -344,13 +312,12 @@ TYPES:
 *----------------------------------------------------------------------*
 DATA gv_vbeln TYPE vbak-vbeln.                       " for SELECT-OPTIONS
 
-DATA gt_xl     TYPE ty_xl_tab.                       " Excel rows
-DATA gt_out    TYPE ty_out_tab.                      " final output
+DATA gt_out    TYPE ty_out_tab.                      " packing list data
 DATA gt_log    TYPE ty_log_tab.                      " messages
+DATA gt_labels TYPE ty_label_tab.                    " column headings
 
 DATA gt_vbak   TYPE ty_vbak_tab.
 DATA gt_bill   TYPE ty_bill_tab.
-DATA gt_inv    TYPE ty_vbeln_tab.                    " billing docs of the SOs
 DATA gt_vbkd   TYPE ty_vbkd_tab.
 DATA gt_t001   TYPE ty_t001_tab.
 DATA gt_adrc   TYPE ty_adrc_tab.
@@ -365,15 +332,21 @@ DATA gt_tvzbt  TYPE ty_tvzbt_tab.
 DATA gt_marc   TYPE ty_marc_tab.
 DATA gt_t604n  TYPE ty_t604n_tab.
 DATA gt_makt   TYPE ty_makt_tab.
-DATA gt_partno TYPE ty_partno_tab.
 
 *----------------------------------------------------------------------*
 * Selection screen
+*   Step 1: sales order(s) only       -> ALV with all columns
+*   Step 2: filled Excel file         -> Adobe Form per packing list
 *----------------------------------------------------------------------*
 SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE TEXT-b01.
-SELECT-OPTIONS s_vbeln FOR gv_vbeln OBLIGATORY.
-PARAMETERS     p_file  TYPE rlgrap-filename LOWER CASE OBLIGATORY.
+SELECT-OPTIONS s_vbeln FOR gv_vbeln.
+PARAMETERS     p_file  TYPE rlgrap-filename LOWER CASE.
 SELECTION-SCREEN END OF BLOCK b1.
+
+*----------------------------------------------------------------------*
+INITIALIZATION.
+*----------------------------------------------------------------------*
+  PERFORM labels.
 
 *----------------------------------------------------------------------*
 AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file.
@@ -381,184 +354,47 @@ AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file.
   PERFORM f4_file CHANGING p_file.
 
 *----------------------------------------------------------------------*
+AT SELECTION-SCREEN.
+*----------------------------------------------------------------------*
+  IF ( sy-ucomm = 'ONLI' OR sy-ucomm = 'PRIN' )
+     AND s_vbeln[] IS INITIAL AND p_file IS INITIAL.
+    MESSAGE 'Enter sales order(s) to fetch the data, or the filled Excel file to print'
+      TYPE 'E'.
+  ENDIF.
+
+*----------------------------------------------------------------------*
 START-OF-SELECTION.
 *----------------------------------------------------------------------*
-  PERFORM read_excel.            " file -> GT_XL (ZSD_PACKNO data)
-  PERFORM read_sales_orders.     " VBAK, VBRP/VBRK of the sales orders
-  PERFORM read_master_data.      " all other tables, bulk
-  PERFORM build_output.          " GT_OUT, one row per PL line item
-  PERFORM display.
+  IF p_file IS INITIAL.
+    " STEP 1 - data from SAP, all columns in the ALV for download
+    PERFORM read_sales_orders.     " VBAK, VBRP/VBRK of the sales orders
+    PERFORM read_master_data.      " all other tables, bulk
+    PERFORM build_output.          " one row per billing item
+    PERFORM show_log.
+    PERFORM display.
+  ELSE.
+    " STEP 2 - filled Excel back in, one form per packing list
+    PERFORM read_upload.           " file -> GT_OUT (columns by heading)
+    PERFORM print_forms.
+    PERFORM show_log.
+  ENDIF.
+
+*&=====================================================================*
+*& STEP 1 - SAP data
+*&=====================================================================*
 
 *&---------------------------------------------------------------------*
-*& 1. Excel file -> GT_XL
-*&---------------------------------------------------------------------*
-FORM read_excel.
-
-  DATA lt_bin     TYPE solix_tab.
-  DATA lv_size    TYPE i.
-  DATA lv_xstring TYPE xstring.
-  DATA lv_file    TYPE string.
-  DATA lo_excel   TYPE REF TO cl_fdt_xl_spreadsheet.
-  DATA lt_sheets  TYPE if_fdt_doc_spreadsheet=>t_worksheet_names.
-  DATA lv_sheet   TYPE string.
-  DATA lr_data    TYPE REF TO data.
-  DATA ls_xl      TYPE ty_xl.
-  DATA lv_row     TYPE i.
-  DATA lv_packno  TYPE string.
-
-  FIELD-SYMBOLS <lt_excel> TYPE STANDARD TABLE.
-  FIELD-SYMBOLS <ls_excel> TYPE any.
-
-  lv_file = p_file.
-
-  " File in binary form
-  cl_gui_frontend_services=>gui_upload(
-    EXPORTING
-      filename        = lv_file
-      filetype        = 'BIN'
-    IMPORTING
-      filelength      = lv_size
-    CHANGING
-      data_tab        = lt_bin
-    EXCEPTIONS
-      file_open_error = 1
-      file_read_error = 2
-      OTHERS          = 3 ).
-  IF sy-subrc <> 0 OR lv_size = 0.
-    MESSAGE |File { lv_file } could not be read| TYPE 'S' DISPLAY LIKE 'E'.
-    LEAVE LIST-PROCESSING.
-  ENDIF.
-  lv_xstring = cl_bcs_convert=>solix_to_xstring( it_solix = lt_bin
-                                                 iv_size  = lv_size ).
-
-  " First worksheet -> internal table, as it is
-  TRY.
-      CREATE OBJECT lo_excel
-        EXPORTING
-          document_name = lv_file
-          xdocument     = lv_xstring.
-    CATCH cx_fdt_excel_core.
-      MESSAGE 'The file is not a valid Excel (.xlsx) file' TYPE 'S' DISPLAY LIKE 'E'.
-      LEAVE LIST-PROCESSING.
-  ENDTRY.
-
-  lo_excel->if_fdt_doc_spreadsheet~get_worksheet_names(
-    IMPORTING worksheet_names = lt_sheets ).
-  READ TABLE lt_sheets INTO lv_sheet INDEX 1.
-  IF sy-subrc <> 0.
-    MESSAGE 'The Excel file has no worksheet' TYPE 'S' DISPLAY LIKE 'E'.
-    LEAVE LIST-PROCESSING.
-  ENDIF.
-
-  lr_data = lo_excel->if_fdt_doc_spreadsheet~get_itab_from_worksheet( lv_sheet ).
-  ASSIGN lr_data->* TO <lt_excel>.
-  IF <lt_excel> IS NOT ASSIGNED OR lines( <lt_excel> ) < 2.
-    MESSAGE 'The worksheet contains no data below the heading row' TYPE 'S' DISPLAY LIKE 'E'.
-    LEAVE LIST-PROCESSING.
-  ENDIF.
-
-  " Row 1 = headings
-  DELETE <lt_excel> INDEX 1.
-
-  LOOP AT <lt_excel> ASSIGNING <ls_excel>.
-    lv_row = sy-tabix + 1.                         " Excel row number
-    CLEAR ls_xl.
-    ls_xl-row = lv_row.
-    PERFORM cell USING <ls_excel>  1 CHANGING ls_xl-packno.
-    PERFORM cell USING <ls_excel>  2 CHANGING ls_xl-invoices.
-    PERFORM cell USING <ls_excel>  3 CHANGING ls_xl-sn.
-    PERFORM cell USING <ls_excel>  4 CHANGING ls_xl-inv_sn.
-    PERFORM cell USING <ls_excel>  5 CHANGING ls_xl-artno.
-    PERFORM cell USING <ls_excel>  6 CHANGING ls_xl-std.
-    PERFORM cell USING <ls_excel>  7 CHANGING ls_xl-art.
-    PERFORM cell USING <ls_excel>  8 CHANGING ls_xl-partno.
-    PERFORM cell USING <ls_excel>  9 CHANGING ls_xl-matdesc.
-    PERFORM cell USING <ls_excel> 10 CHANGING ls_xl-qty.
-    PERFORM cell USING <ls_excel> 11 CHANGING ls_xl-gwt.
-    PERFORM cell USING <ls_excel> 12 CHANGING ls_xl-nwt.
-    PERFORM cell USING <ls_excel> 13 CHANGING ls_xl-hsn.
-    PERFORM cell USING <ls_excel> 14 CHANGING ls_xl-packdt.
-    PERFORM cell USING <ls_excel> 15 CHANGING ls_xl-expref.
-    PERFORM cell USING <ls_excel> 16 CHANGING ls_xl-party_ref.
-    PERFORM cell USING <ls_excel> 17 CHANGING ls_xl-ref_dt.
-    PERFORM cell USING <ls_excel> 18 CHANGING ls_xl-cnty_orgn.
-    PERFORM cell USING <ls_excel> 19 CHANGING ls_xl-np1.
-    PERFORM cell USING <ls_excel> 20 CHANGING ls_xl-np2.
-    PERFORM cell USING <ls_excel> 21 CHANGING ls_xl-np3.
-    PERFORM cell USING <ls_excel> 22 CHANGING ls_xl-np4.
-    PERFORM cell USING <ls_excel> 23 CHANGING ls_xl-np5.
-    PERFORM cell USING <ls_excel> 24 CHANGING ls_xl-prec.
-    PERFORM cell USING <ls_excel> 25 CHANGING ls_xl-rec_pc.
-    PERFORM cell USING <ls_excel> 26 CHANGING ls_xl-pol.
-    PERFORM cell USING <ls_excel> 27 CHANGING ls_xl-pod.
-    PERFORM cell USING <ls_excel> 28 CHANGING ls_xl-pld.
-    PERFORM cell USING <ls_excel> 29 CHANGING ls_xl-mark.
-    PERFORM cell USING <ls_excel> 30 CHANGING ls_xl-vsl_flt.
-    PERFORM cell USING <ls_excel> 31 CHANGING ls_xl-cont.
-    PERFORM cell USING <ls_excel> 32 CHANGING ls_xl-nopack.
-    PERFORM cell USING <ls_excel> 33 CHANGING ls_xl-goods.
-    PERFORM cell USING <ls_excel> 34 CHANGING ls_xl-decl.
-
-    IF ls_xl IS INITIAL OR ( ls_xl-packno IS INITIAL AND ls_xl-sn IS INITIAL ).
-      CONTINUE.                                     " empty row
-    ENDIF.
-
-    " A row without packing list number belongs to the packing list above
-    IF ls_xl-packno IS INITIAL.
-      ls_xl-packno = lv_packno.
-    ENDIF.
-    lv_packno = ls_xl-packno.
-
-    IF ls_xl-packno IS INITIAL.
-      APPEND VALUE #( type = 'W' text = |Row { lv_row }: no packing list number - row ignored| ) TO gt_log.
-      CONTINUE.
-    ENDIF.
-
-    APPEND ls_xl TO gt_xl.
-  ENDLOOP.
-
-  IF gt_xl IS INITIAL.
-    MESSAGE 'The Excel file contains no packing list data' TYPE 'S' DISPLAY LIKE 'E'.
-    LEAVE LIST-PROCESSING.
-  ENDIF.
-
-ENDFORM.
-
-*&---------------------------------------------------------------------*
-*& Cell n of an Excel row as text. Placeholder texts of the template
-*& ("Fetch from logic", "fetch from material master") mean "no value".
-*&---------------------------------------------------------------------*
-FORM cell USING    is_row  TYPE any
-                   iv_col  TYPE i
-          CHANGING cv_text TYPE string.
-
-  FIELD-SYMBOLS <lv_cell> TYPE any.
-
-  CLEAR cv_text.
-  ASSIGN COMPONENT iv_col OF STRUCTURE is_row TO <lv_cell>.
-  IF sy-subrc <> 0.
-    RETURN.
-  ENDIF.
-
-  cv_text = <lv_cell>.
-  IF condense( cv_text ) IS INITIAL.
-    CLEAR cv_text.
-    RETURN.
-  ENDIF.
-
-  IF to_upper( condense( cv_text ) ) CP 'FETCH FROM*'.
-    CLEAR cv_text.
-  ENDIF.
-
-ENDFORM.
-
-*&---------------------------------------------------------------------*
-*& 2. Sales orders -> billing documents (VBRP-AUBEL = sales order)
+*& Sales orders -> billing documents (VBRP-AUBEL = sales order)
 *&---------------------------------------------------------------------*
 FORM read_sales_orders.
 
   DATA lv_text   TYPE string.
   DATA lt_billed TYPE SORTED TABLE OF vbak-vbeln WITH UNIQUE KEY table_line.
+
+  IF s_vbeln[] IS INITIAL.
+    MESSAGE 'Enter at least one sales order' TYPE 'S' DISPLAY LIKE 'E'.
+    LEAVE LIST-PROCESSING.
+  ENDIF.
 
   " Sales orders exist? VGBEL = quotation (logic B13)
   SELECT vbeln, vgbel
@@ -573,7 +409,8 @@ FORM read_sales_orders.
   " Single values entered that do not exist
   LOOP AT s_vbeln INTO DATA(ls_sel) WHERE sign = 'I' AND option = 'EQ'.
     IF NOT line_exists( gt_vbak[ vbeln = ls_sel-low ] ).
-      APPEND VALUE #( type = 'E' text = |Sales order { ls_sel-low ALPHA = OUT } does not exist| ) TO gt_log.
+      APPEND VALUE #( type = 'E' ref = |{ ls_sel-low ALPHA = OUT }|
+                      text = 'Sales order does not exist' ) TO gt_log.
     ENDIF.
   ENDLOOP.
 
@@ -594,22 +431,21 @@ FORM read_sales_orders.
   ENDIF.
 
   LOOP AT gt_bill INTO DATA(ls_bill).
-    INSERT ls_bill-vbeln INTO TABLE gt_inv.
     INSERT ls_bill-aubel INTO TABLE lt_billed.
   ENDLOOP.
 
   " Sales orders without billing document
   LOOP AT gt_vbak INTO DATA(ls_vbak).
     IF NOT line_exists( lt_billed[ table_line = ls_vbak-vbeln ] ).
-      lv_text = |Sales order { ls_vbak-vbeln ALPHA = OUT } has no billing document|.
-      APPEND VALUE #( type = 'W' text = lv_text ) TO gt_log.
+      lv_text = |{ ls_vbak-vbeln ALPHA = OUT }|.
+      APPEND VALUE #( type = 'W' ref = lv_text text = 'Sales order has no billing document' ) TO gt_log.
     ENDIF.
   ENDLOOP.
 
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& 3. All master data, each table read once (FOR ALL ENTRIES / JOIN)
+*& All master data, each table read once (FOR ALL ENTRIES / JOIN)
 *&---------------------------------------------------------------------*
 FORM read_master_data.
 
@@ -644,7 +480,6 @@ FORM read_master_data.
   DATA lt_matnr    TYPE SORTED TABLE OF matnr WITH UNIQUE KEY table_line.
   DATA lt_steuc    TYPE SORTED TABLE OF marc-steuc WITH UNIQUE KEY table_line.
   DATA lt_adrc     TYPE ty_adrc_std.
-  DATA lv_matnr    TYPE matnr.
 
   " Keys from the billing documents
   LOOP AT gt_bill INTO DATA(ls_bill).
@@ -661,29 +496,6 @@ FORM read_master_data.
 
   LOOP AT gt_vbak INTO DATA(ls_vbak) WHERE vgbel IS NOT INITIAL.
     INSERT ls_vbak-vgbel INTO TABLE lt_vgbel.
-  ENDLOOP.
-
-  " Part No. of the Excel = material number (logic B58 "from STEP no 53")
-  LOOP AT gt_xl INTO DATA(ls_xl) WHERE partno IS NOT INITIAL.
-    IF line_exists( gt_partno[ partno = ls_xl-partno ] ).
-      CONTINUE.
-    ENDIF.
-    CLEAR lv_matnr.
-    CALL FUNCTION 'CONVERSION_EXIT_MATN1_INPUT'
-      EXPORTING
-        input        = ls_xl-partno
-      IMPORTING
-        output       = lv_matnr
-      EXCEPTIONS
-        length_error = 1
-        OTHERS       = 2.
-    IF sy-subrc <> 0.
-      CLEAR lv_matnr.
-    ENDIF.
-    INSERT VALUE #( partno = ls_xl-partno matnr = lv_matnr ) INTO TABLE gt_partno.
-    IF lv_matnr IS NOT INITIAL.
-      INSERT lv_matnr INTO TABLE lt_matnr.
-    ENDIF.
   ENDLOOP.
 
   " Order no. & date (B13): quotation VBKD header data
@@ -800,7 +612,7 @@ FORM read_master_data.
 
   " Payment term text (B43)
   IF lt_zterm IS NOT INITIAL.
-    SELECT zterm, ztagg, vtext
+    SELECT zterm, vtext
       FROM tvzbt
       FOR ALL ENTRIES IN @lt_zterm
       WHERE spras = @gc_langu
@@ -843,204 +655,70 @@ FORM read_master_data.
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& 4. Final table: per packing list, header data from SAP and from the
-*&    Excel (ZSD_PACKNO), one output row per line item
+*& ALV rows: one per billing item. SAP fields filled from the logic
+*& sheet, ZSD_PACKNO fields empty (filled by the user in Excel).
 *&---------------------------------------------------------------------*
 FORM build_output.
 
-  DATA lt_packno   TYPE ty_string_tab.
-  DATA ls_head     TYPE ty_xl.
-  DATA lt_inv      TYPE ty_vbeln_tab.
-  DATA lt_inv_ok   TYPE ty_vbeln_tab.
-  DATA lt_items    TYPE ty_xl_tab.
-  DATA ls_out      TYPE ty_out.
-  DATA ls_line     TYPE ty_out.
-  DATA lv_text     TYPE string.
+  DATA ls_head  TYPE ty_out.
+  DATA ls_out   TYPE ty_out.
+  DATA lt_goods TYPE ty_string_tab.
+  DATA lt_steuc TYPE SORTED TABLE OF marc-steuc WITH UNIQUE KEY table_line.
+  DATA lv_goods TYPE string.
+  DATA lv_prev  TYPE vbrk-vbeln.
 
-  " Packing lists in the order of the file
-  LOOP AT gt_xl INTO DATA(ls_xl).
-    IF NOT line_exists( lt_packno[ table_line = ls_xl-packno ] ).
-      APPEND ls_xl-packno TO lt_packno.
-    ENDIF.
-  ENDLOOP.
-
-  LOOP AT lt_packno INTO DATA(lv_packno).
-
-    " ZSD_PACKNO data of this packing list: header values = first filled
-    " value of the packing list rows, items = rows with Sl.No.
-    PERFORM pl_data USING lv_packno CHANGING ls_head lt_inv lt_items.
-
-    " Invoices of the packing list that belong to the entered sales orders
-    CLEAR lt_inv_ok.
-    LOOP AT lt_inv INTO DATA(lv_inv).
-      IF line_exists( gt_inv[ table_line = lv_inv ] ).
-        INSERT lv_inv INTO TABLE lt_inv_ok.
-      ELSE.
-        lv_text = |Invoice { lv_inv ALPHA = OUT } does not belong to the entered sales orders (or is cancelled) - ignored|.
-        APPEND VALUE #( type = 'W' packno = lv_packno text = lv_text ) TO gt_log.
-      ENDIF.
-    ENDLOOP.
-
-    IF lt_inv_ok IS INITIAL.
-      " Packing list of other sales orders - not reported
-      CONTINUE.
-    ENDIF.
-
-    IF lt_items IS INITIAL.
-      APPEND VALUE #( type = 'E' packno = lv_packno text = 'No line items (Sl.No.) in the file' ) TO gt_log.
-      CONTINUE.
-    ENDIF.
-
-    PERFORM pl_header USING lv_packno ls_head lt_inv_ok CHANGING ls_out.
-
-    LOOP AT lt_items INTO DATA(ls_item).
-      ls_line = ls_out.
-      PERFORM pl_item USING lv_packno ls_item lt_inv_ok CHANGING ls_line.
-      APPEND ls_line TO gt_out.
-    ENDLOOP.
-
-  ENDLOOP.
-
-  IF gt_out IS INITIAL.
-    APPEND VALUE #( type = 'E' text = 'No packing list in the file belongs to the entered sales orders' ) TO gt_log.
-  ENDIF.
-
-ENDFORM.
-
-*&---------------------------------------------------------------------*
-*& Rows of one packing list: header values, invoice numbers, items
-*&---------------------------------------------------------------------*
-FORM pl_data USING    iv_packno TYPE string
-             CHANGING cs_head   TYPE ty_xl
-                      ct_inv    TYPE ty_vbeln_tab
-                      ct_items  TYPE ty_xl_tab.
-
-  DATA lt_token TYPE ty_string_tab.
-  DATA lv_vbeln TYPE vbeln_vf.
-  DATA lv_text  TYPE string.
-
-  FIELD-SYMBOLS <lv_head> TYPE any.
-  FIELD-SYMBOLS <lv_row>  TYPE any.
-
-  CLEAR: cs_head, ct_inv, ct_items.
-
-  LOOP AT gt_xl INTO DATA(ls_xl) WHERE packno = iv_packno.
-
-    " Header fields: first filled value of the packing list
-    DO.
-      ASSIGN COMPONENT sy-index OF STRUCTURE cs_head TO <lv_head>.
-      IF sy-subrc <> 0.
-        EXIT.
-      ENDIF.
-      ASSIGN COMPONENT sy-index OF STRUCTURE ls_xl TO <lv_row>.
-      IF <lv_head> IS INITIAL AND <lv_row> IS NOT INITIAL.
-        <lv_head> = <lv_row>.
-      ENDIF.
-    ENDDO.
-
-    " Invoice numbers - several in one cell: "A, B & C"
-    IF ls_xl-invoices IS NOT INITIAL.
-      lv_text = ls_xl-invoices.
-      REPLACE ALL OCCURRENCES OF REGEX `[,;&/\s]+` IN lv_text WITH ` `.
-      SPLIT condense( lv_text ) AT ` ` INTO TABLE lt_token.
-      LOOP AT lt_token INTO DATA(lv_token) WHERE table_line IS NOT INITIAL.
-        IF lv_token CO '0123456789' AND strlen( lv_token ) <= 10.
-          lv_vbeln = |{ lv_token ALPHA = IN WIDTH = 10 }|.
-          INSERT lv_vbeln INTO TABLE ct_inv.
+  " B42: HSN and description of all billing documents, common HSN once
+  LOOP AT gt_bill INTO DATA(ls_bill).
+    READ TABLE gt_marc INTO DATA(ls_marc) WITH TABLE KEY matnr = ls_bill-matnr werks = ls_bill-werks.
+    IF sy-subrc = 0 AND ls_marc-steuc IS NOT INITIAL.
+      INSERT ls_marc-steuc INTO TABLE lt_steuc.
+      IF sy-subrc = 0.                                  " new HSN only
+        READ TABLE gt_t604n INTO DATA(ls_t604n) WITH TABLE KEY steuc = ls_marc-steuc.
+        IF sy-subrc = 0.
+          APPEND |{ ls_t604n-text1 } - { ls_marc-steuc }| TO lt_goods.
         ELSE.
-          APPEND VALUE #( type = 'W' packno = iv_packno
-                          text = |Row { ls_xl-row }: "{ lv_token }" is not an invoice number - ignored| ) TO gt_log.
+          APPEND |{ ls_marc-steuc }| TO lt_goods.
         ENDIF.
-      ENDLOOP.
+      ENDIF.
     ENDIF.
-
-    " Line items
-    IF ls_xl-sn IS NOT INITIAL.
-      APPEND ls_xl TO ct_items.
-    ENDIF.
-
   ENDLOOP.
-
-  IF ct_inv IS INITIAL.
-    APPEND VALUE #( type = 'E' packno = iv_packno text = 'No SAP invoice number in the file' ) TO gt_log.
+  lv_goods = concat_lines_of( table = lt_goods sep = ` / ` ).
+  IF lv_goods IS INITIAL.
+    APPEND VALUE #( type = 'W' text = 'No HSN code (MARC-STEUC) for the billed materials - description of goods empty' ) TO gt_log.
   ENDIF.
+
+  " Header data once per billing document, then its items
+  LOOP AT gt_bill INTO ls_bill.
+    IF ls_bill-vbeln <> lv_prev.
+      PERFORM invoice_header USING ls_bill lv_goods CHANGING ls_head.
+      lv_prev = ls_bill-vbeln.
+    ENDIF.
+    ls_out = ls_head.
+    PERFORM bill_item USING ls_bill CHANGING ls_out.
+    APPEND ls_out TO gt_out.
+  ENDLOOP.
 
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Header data of one packing list (logic sheet B3 - B44, B61)
+*& Header data of one billing document (logic sheet B3 - B44)
 *&---------------------------------------------------------------------*
-FORM pl_header USING    iv_packno TYPE string
-                        is_head   TYPE ty_xl
-                        it_inv    TYPE ty_vbeln_tab
-               CHANGING cs_out    TYPE ty_out.
+FORM invoice_header USING    is_bill  TYPE ty_bill
+                             iv_goods TYPE string
+                    CHANGING cs_out   TYPE ty_out.
 
-  DATA ls_bill    TYPE ty_bill.
-  DATA ls_party   TYPE ty_party.
-  DATA lt_orders  TYPE ty_string_tab.
-  DATA lt_ord_no  TYPE ty_string_tab.
-  DATA lt_ord_dt  TYPE ty_string_tab.
-  DATA lt_goods   TYPE ty_string_tab.
-  DATA lt_inv_ext TYPE ty_string_tab.
-  DATA lt_steuc   TYPE SORTED TABLE OF marc-steuc WITH UNIQUE KEY table_line.
-  DATA lv_text    TYPE string.
-  DATA lv_ok      TYPE abap_bool.
+  DATA ls_party TYPE ty_party.
+  DATA lv_ref   TYPE string.
 
   CLEAR cs_out.
-
-  " Header values from VBRK: first billing document of the packing list
-  " (A5). Billing items of all its billing documents for B13 / B42.
-  READ TABLE it_inv INTO DATA(lv_first) INDEX 1.
-  READ TABLE gt_bill INTO ls_bill WITH KEY vbeln = lv_first.
-
-  LOOP AT it_inv INTO DATA(lv_inv).
-    APPEND |{ lv_inv ALPHA = OUT }| TO lt_inv_ext.
-    LOOP AT gt_bill INTO DATA(ls_item) WHERE vbeln = lv_inv.
-      " Sales orders of the packing list
-      lv_text = |{ ls_item-aubel ALPHA = OUT }|.
-      IF NOT line_exists( lt_orders[ table_line = lv_text ] ).
-        APPEND lv_text TO lt_orders.
-        " B13: AUBEL -> VBAK-VGBEL -> VBKD-BSTKD / BSTDK
-        READ TABLE gt_vbak INTO DATA(ls_vbak) WITH TABLE KEY vbeln = ls_item-aubel.
-        IF sy-subrc = 0.
-          READ TABLE gt_vbkd INTO DATA(ls_vbkd) WITH TABLE KEY vbeln = ls_vbak-vgbel.
-          IF sy-subrc = 0.
-            IF ls_vbkd-bstkd IS NOT INITIAL AND NOT line_exists( lt_ord_no[ table_line = ls_vbkd-bstkd ] ).
-              APPEND CONV string( ls_vbkd-bstkd ) TO lt_ord_no.
-            ENDIF.
-            IF ls_vbkd-bstdk IS NOT INITIAL.
-              lv_text = |{ ls_vbkd-bstdk+6(2) }.{ ls_vbkd-bstdk+4(2) }.{ ls_vbkd-bstdk(4) }|.
-              IF NOT line_exists( lt_ord_dt[ table_line = lv_text ] ).
-                APPEND lv_text TO lt_ord_dt.
-              ENDIF.
-            ENDIF.
-          ELSE.
-            APPEND VALUE #( type = 'W' packno = iv_packno
-                            text = |Sales order { ls_item-aubel ALPHA = OUT }: no quotation reference (VBAK-VGBEL / VBKD) - order no. & date empty| ) TO gt_log.
-          ENDIF.
-        ENDIF.
-      ENDIF.
-      " B42: VBRP-MATNR -> MARC-STEUC -> T604N-TEXT1, common HSN clubbed
-      READ TABLE gt_marc INTO DATA(ls_marc) WITH TABLE KEY matnr = ls_item-matnr werks = ls_item-werks.
-      IF sy-subrc = 0 AND ls_marc-steuc IS NOT INITIAL.
-        INSERT ls_marc-steuc INTO TABLE lt_steuc.
-        IF sy-subrc = 0.                               " new HSN only
-          READ TABLE gt_t604n INTO DATA(ls_t604n) WITH TABLE KEY steuc = ls_marc-steuc.
-          IF sy-subrc = 0.
-            APPEND |{ ls_t604n-text1 } - { ls_marc-steuc }| TO lt_goods.
-          ELSE.
-            APPEND |{ ls_marc-steuc }| TO lt_goods.
-          ENDIF.
-        ENDIF.
-      ENDIF.
-    ENDLOOP.
-  ENDLOOP.
-
-  cs_out-sales_orders = concat_lines_of( table = lt_orders  sep = `, ` ).
-  cs_out-invoices     = concat_lines_of( table = lt_inv_ext sep = `, ` ).
+  lv_ref = |{ is_bill-vbeln ALPHA = OUT }|.
+  cs_out-invoices = lv_ref.
 
   " ---- Exporter (B3 - B7, B11) ------------------------------------------
-  READ TABLE gt_t001 INTO DATA(ls_t001) WITH TABLE KEY bukrs = ls_bill-bukrs.
+  READ TABLE gt_t001 INTO DATA(ls_t001) WITH TABLE KEY bukrs = is_bill-bukrs.
+  IF sy-subrc <> 0.
+    CLEAR ls_t001.
+  ENDIF.
   READ TABLE gt_adrc INTO DATA(ls_adrc) WITH TABLE KEY addrnumber = ls_t001-adrnr.
   IF sy-subrc = 0.
     cs_out-exp_name1     = ls_adrc-name1.
@@ -1061,38 +739,29 @@ FORM pl_header USING    iv_packno TYPE string
       cs_out-exp_country_tx = ls_t005t-landx.                        " B5
     ENDIF.
   ELSE.
-    APPEND VALUE #( type = 'W' packno = iv_packno
-                    text = |Company code { ls_bill-bukrs }: no address (T001 / ADRC)| ) TO gt_log.
+    APPEND VALUE #( type = 'W' ref = lv_ref
+                    text = |Company code { is_bill-bukrs }: no address (T001 / ADRC)| ) TO gt_log.
   ENDIF.
 
   READ TABLE gt_branch INTO DATA(ls_branch)
-       WITH TABLE KEY bukrs = ls_bill-bukrs branch = ls_bill-bupla.
+       WITH TABLE KEY bukrs = is_bill-bukrs branch = is_bill-bupla.
   IF sy-subrc = 0.
     cs_out-gstin = ls_branch-gstin.                                  " B6
   ELSE.
-    APPEND VALUE #( type = 'W' packno = iv_packno
-                    text = |No GST No. in J_1BBRANCH for { ls_bill-bukrs } / { ls_bill-bupla }| ) TO gt_log.
+    APPEND VALUE #( type = 'W' ref = lv_ref
+                    text = |No GST No. in J_1BBRANCH for { is_bill-bukrs } / { is_bill-bupla }| ) TO gt_log.
   ENDIF.
 
-  READ TABLE gt_t001z INTO DATA(ls_t001z) WITH TABLE KEY bukrs = ls_bill-bukrs.
+  READ TABLE gt_t001z INTO DATA(ls_t001z) WITH TABLE KEY bukrs = is_bill-bukrs.
   IF sy-subrc = 0.
     cs_out-cin = ls_t001z-paval.                                     " B7
   ELSE.
-    APPEND VALUE #( type = 'W' packno = iv_packno
-                    text = |No CIN in T001Z (party ZCIN) for company code { ls_bill-bukrs }| ) TO gt_log.
+    APPEND VALUE #( type = 'W' ref = lv_ref
+                    text = |No CIN in T001Z (party ZCIN) for company code { is_bill-bukrs }| ) TO gt_log.
   ENDIF.
 
-  " ---- ZSD_PACKNO header fields (B9, B10, B14, B16) ----------------------
-  cs_out-packno = iv_packno.
-  PERFORM to_date USING is_head-packdt iv_packno 'Packing list date' CHANGING cs_out-packdt lv_ok.
-  cs_out-order_no   = concat_lines_of( table = lt_ord_no sep = ` & ` ).
-  cs_out-order_date = concat_lines_of( table = lt_ord_dt sep = ` & ` ).
-  cs_out-buyer_ref  = is_head-party_ref.
-  PERFORM to_date USING is_head-ref_dt iv_packno 'Buyer''s reference date' CHANGING cs_out-buyer_ref_dt lv_ok.
-  cs_out-cnty_orgn  = is_head-cnty_orgn.
-
-  " ---- Sold-to (B20 - B23) and ship-to (B26 - B29) -----------------------
-  PERFORM partner USING ls_bill gc_parvw_sp iv_packno CHANGING ls_party.
+  " ---- Sold-to (B20 - B23) ------------------------------------------------
+  PERFORM partner USING is_bill gc_parvw_sp lv_ref CHANGING ls_party.
   cs_out-sp_kunnr = ls_party-kunnr.
   READ TABLE gt_adrc INTO ls_adrc WITH TABLE KEY addrnumber = ls_party-adrnr.
   IF sy-subrc = 0.
@@ -1111,7 +780,8 @@ FORM pl_header USING    iv_packno TYPE string
   PERFORM contact USING ls_party-adrnr
                   CHANGING cs_out-sp_email cs_out-sp_telephone cs_out-sp_mobile.
 
-  PERFORM partner USING ls_bill gc_parvw_sh iv_packno CHANGING ls_party.
+  " ---- Ship-to (B26 - B29), country of final destination (B17) -----------
+  PERFORM partner USING is_bill gc_parvw_sh lv_ref CHANGING ls_party.
   cs_out-sh_kunnr = ls_party-kunnr.
   READ TABLE gt_adrc INTO ls_adrc WITH TABLE KEY addrnumber = ls_party-adrnr.
   IF sy-subrc = 0.
@@ -1131,105 +801,59 @@ FORM pl_header USING    iv_packno TYPE string
   PERFORM contact USING ls_party-adrnr
                   CHANGING cs_out-sh_email cs_out-sh_telephone cs_out-sh_mobile.
 
-  " ---- Notifier parties and shipment (B31 - B41) - ZSD_PACKNO ------------
-  cs_out-np1           = is_head-np1.
-  cs_out-np2           = is_head-np2.
-  cs_out-np3           = is_head-np3.
-  cs_out-np4           = is_head-np4.
-  cs_out-np5           = is_head-np5.
-  cs_out-pre_carriage  = is_head-prec.
-  cs_out-place_receipt = is_head-rec_pc.
-  cs_out-vessel_flight = is_head-vsl_flt.
-  cs_out-port_loading  = is_head-pol.
-  cs_out-port_disch    = is_head-pod.
-  cs_out-place_deliv   = is_head-pld.
-  cs_out-marks_nos     = is_head-mark.
-  cs_out-container_no  = is_head-cont.
-  cs_out-no_packages   = is_head-nopack.
-
   " ---- Description of goods (B42), payment (B43), shipment terms (B44) ---
-  cs_out-goods_desc = concat_lines_of( table = lt_goods sep = ` / ` ).
-  IF cs_out-goods_desc IS INITIAL.
-    APPEND VALUE #( type = 'W' packno = iv_packno
-                    text = 'No HSN code (MARC-STEUC) for the billed materials - description of goods empty' ) TO gt_log.
+  cs_out-goods_desc = iv_goods.
+  cs_out-zterm      = is_bill-zterm.
+  READ TABLE gt_tvzbt INTO DATA(ls_tvzbt) WITH TABLE KEY zterm = is_bill-zterm.
+  IF sy-subrc = 0.
+    cs_out-payment_term = ls_tvzbt-vtext.
   ENDIF.
-
-  cs_out-zterm = ls_bill-zterm.
-  LOOP AT gt_tvzbt INTO DATA(ls_tvzbt) WHERE zterm = ls_bill-zterm.
-    cs_out-payment_term = ls_tvzbt-vtext.                  " lowest ZTAGG
-    EXIT.
-  ENDLOOP.
-  cs_out-inco1 = ls_bill-inco1.
-  cs_out-inco2 = ls_bill-inco2.
-
-  " ---- Footer (B61) - ZSD_PACKNO --------------------------------------------
-  cs_out-declaration = is_head-decl.
+  cs_out-inco1 = is_bill-inco1.
+  cs_out-inco2 = is_bill-inco2.
 
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Line item (B47 - B58) - ZSD_PACKNO values; product description and
-*& HSN from the material master when not given in the file
+*& Item part of a row: sales order, order no. & date (B13), part no.,
+*& description (B54) and HSN (B58) of the billed material
 *&---------------------------------------------------------------------*
-FORM pl_item USING    iv_packno TYPE string
-                      is_item   TYPE ty_xl
-                      it_inv    TYPE ty_vbeln_tab
-             CHANGING cs_out    TYPE ty_out.
+FORM bill_item USING    is_bill TYPE ty_bill
+               CHANGING cs_out  TYPE ty_out.
 
-  DATA lv_matnr TYPE matnr.
-  DATA lv_werks TYPE werks_d.
-  DATA lv_text  TYPE string.
+  DATA lv_partno TYPE c LENGTH 40.
 
-  PERFORM to_int USING is_item-sn     iv_packno 'Sl.No.'     CHANGING cs_out-sn.
-  PERFORM to_int USING is_item-inv_sn iv_packno 'Sr.No. INV' CHANGING cs_out-inv_sn.
-  cs_out-article_no = is_item-artno.
-  PERFORM to_int USING is_item-std    iv_packno 'STD'        CHANGING cs_out-std.
-  PERFORM to_int USING is_item-art    iv_packno 'Articles'   CHANGING cs_out-articles.
-  " B52 ZSD_TART: no column in the Excel file - left empty (A7)
-  cs_out-part_no = is_item-partno.
-  PERFORM to_dec USING is_item-qty iv_packno 'Quantity'  CHANGING cs_out-quantity.
-  PERFORM to_dec USING is_item-gwt iv_packno 'Gross Wt.' CHANGING cs_out-gross_wt.
-  PERFORM to_dec USING is_item-nwt iv_packno 'Net Wt.'   CHANGING cs_out-net_wt.
+  cs_out-sales_orders = |{ is_bill-aubel ALPHA = OUT }|.
 
-  " Material of the Part No. and its plant in the packing list invoices
-  READ TABLE gt_partno INTO DATA(ls_partno) WITH TABLE KEY partno = is_item-partno.
+  " B13: AUBEL -> VBAK-VGBEL -> VBKD-BSTKD / BSTDK
+  READ TABLE gt_vbak INTO DATA(ls_vbak) WITH TABLE KEY vbeln = is_bill-aubel.
   IF sy-subrc = 0.
-    lv_matnr = ls_partno-matnr.
-  ENDIF.
-  IF lv_matnr IS NOT INITIAL.
-    LOOP AT it_inv INTO DATA(lv_inv).
-      LOOP AT gt_bill INTO DATA(ls_bill) WHERE vbeln = lv_inv AND matnr = lv_matnr.
-        lv_werks = ls_bill-werks.
-        EXIT.
-      ENDLOOP.
-      IF lv_werks IS NOT INITIAL.
-        EXIT.
-      ENDIF.
-    ENDLOOP.
-  ENDIF.
-
-  " B54: ZSD_MATDESC or material description
-  cs_out-prod_desc = is_item-matdesc.
-  IF cs_out-prod_desc IS INITIAL.
-    READ TABLE gt_makt INTO DATA(ls_makt) WITH TABLE KEY matnr = lv_matnr.
+    READ TABLE gt_vbkd INTO DATA(ls_vbkd) WITH TABLE KEY vbeln = ls_vbak-vgbel.
     IF sy-subrc = 0.
-      cs_out-prod_desc = ls_makt-maktx.
-    ELSE.
-      lv_text = |Sl.No. { is_item-sn }: no product description in the file or the material master|.
-      APPEND VALUE #( type = 'W' packno = iv_packno text = lv_text ) TO gt_log.
+      cs_out-order_no = ls_vbkd-bstkd.
+      IF ls_vbkd-bstdk IS NOT INITIAL.
+        cs_out-order_date = |{ ls_vbkd-bstdk+6(2) }.{ ls_vbkd-bstdk+4(2) }.{ ls_vbkd-bstdk(4) }|.
+      ENDIF.
     ENDIF.
   ENDIF.
 
-  " B58: ZSD_HSN or MARC-STEUC of the Part No. (plant of the billing item)
-  cs_out-hsn = is_item-hsn.
-  IF cs_out-hsn IS INITIAL.
-    READ TABLE gt_marc INTO DATA(ls_marc) WITH TABLE KEY matnr = lv_matnr werks = lv_werks.
-    IF sy-subrc = 0 AND ls_marc-steuc IS NOT INITIAL.
-      cs_out-hsn = ls_marc-steuc.
-    ELSE.
-      lv_text = |Sl.No. { is_item-sn }: part no. { is_item-partno } has no HSN in the file and is not billed in the packing list invoices (MARC)|.
-      APPEND VALUE #( type = 'W' packno = iv_packno text = lv_text ) TO gt_log.
-    ENDIF.
+  " Part No. = billed material (logic B58 "from STEP no 53")
+  IF is_bill-matnr IS NOT INITIAL.
+    CALL FUNCTION 'CONVERSION_EXIT_MATN1_OUTPUT'
+      EXPORTING
+        input  = is_bill-matnr
+      IMPORTING
+        output = lv_partno.
+    cs_out-part_no = condense( lv_partno ).
+  ENDIF.
+
+  READ TABLE gt_makt INTO DATA(ls_makt) WITH TABLE KEY matnr = is_bill-matnr.
+  IF sy-subrc = 0.
+    cs_out-prod_desc = ls_makt-maktx.                                " B54
+  ENDIF.
+
+  READ TABLE gt_marc INTO DATA(ls_marc) WITH TABLE KEY matnr = is_bill-matnr werks = is_bill-werks.
+  IF sy-subrc = 0.
+    cs_out-hsn = ls_marc-steuc.                                      " B58
   ENDIF.
 
 ENDFORM.
@@ -1239,10 +863,10 @@ ENDFORM.
 *& billing document, PARVW = SP / SH -> KUNN2 -> KNA1-ADRNR. Several
 *& partners: the lowest counter PARZA (A4).
 *&---------------------------------------------------------------------*
-FORM partner USING    is_bill   TYPE ty_bill
-                      iv_parvw  TYPE parvw
-                      iv_packno TYPE string
-             CHANGING cs_party  TYPE ty_party.
+FORM partner USING    is_bill  TYPE ty_bill
+                      iv_parvw TYPE parvw
+                      iv_ref   TYPE string
+             CHANGING cs_party TYPE ty_party.
 
   CLEAR cs_party.
 
@@ -1253,7 +877,7 @@ FORM partner USING    is_bill   TYPE ty_bill
                 spart = is_bill-spart
                 parvw = iv_parvw.
   IF sy-subrc <> 0.
-    APPEND VALUE #( type = 'W' packno = iv_packno
+    APPEND VALUE #( type = 'W' ref = iv_ref
                     text = |Customer { is_bill-kunag ALPHA = OUT }: no partner { iv_parvw } in KNVP for { is_bill-vkorg }/{ is_bill-vtweg }/{ is_bill-spart }| ) TO gt_log.
     RETURN.
   ENDIF.
@@ -1295,25 +919,784 @@ FORM contact USING    iv_adrnr TYPE adrnr
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Conversions of Excel values (with a warning when not convertible)
+*& ALV grid with ALL columns (filled or not). The standard ALV functions
+*& include "Export -> Spreadsheet" for the download.
 *&---------------------------------------------------------------------*
-FORM to_int USING    iv_text   TYPE string
-                     iv_packno TYPE string
-                     iv_field  TYPE csequence
-            CHANGING cv_value  TYPE i.
+FORM display.
 
-  DATA lv_dec TYPE p LENGTH 16 DECIMALS 3.
+  DATA lo_alv  TYPE REF TO cl_salv_table.
+  DATA lx_salv TYPE REF TO cx_salv_error.
 
-  CLEAR cv_value.
-  PERFORM to_dec USING iv_text iv_packno iv_field CHANGING lv_dec.
-  cv_value = round( val = lv_dec dec = 0 ).
+  IF gt_out IS INITIAL.
+    MESSAGE 'No data to display' TYPE 'S' DISPLAY LIKE 'E'.
+    RETURN.
+  ENDIF.
+
+  TRY.
+      cl_salv_table=>factory( IMPORTING r_salv_table = lo_alv
+                              CHANGING  t_table      = gt_out ).
+      lo_alv->get_functions( )->set_all( abap_true ).
+      lo_alv->get_display_settings( )->set_striped_pattern( abap_true ).
+      lo_alv->get_display_settings( )->set_list_header(
+        'Export Packing List - fill the empty columns in Excel and upload the file to print' ).
+      LOOP AT gt_labels INTO DATA(ls_label).
+        PERFORM column_text USING lo_alv ls_label-name ls_label-text.
+      ENDLOOP.
+      lo_alv->display( ).
+    CATCH cx_salv_error INTO lx_salv.
+      MESSAGE lx_salv TYPE 'S' DISPLAY LIKE 'E'.
+  ENDTRY.
 
 ENDFORM.
 
-FORM to_dec USING    iv_text   TYPE string
-                     iv_packno TYPE string
-                     iv_field  TYPE csequence
-            CHANGING cv_value  TYPE p.
+*&=====================================================================*
+*& STEP 2 - filled Excel -> Adobe Form
+*&=====================================================================*
+
+*&---------------------------------------------------------------------*
+*& Filled Excel (downloaded from the ALV) -> GT_OUT.
+*& Columns are found by their heading (ALV column text or field name),
+*& so the column order of the file does not matter.
+*&---------------------------------------------------------------------*
+FORM read_upload.
+
+  TYPES: BEGIN OF ty_col,
+           col  TYPE i,                 " column in the file
+           name TYPE lvc_fname,         " field of TY_OUT
+         END OF ty_col.
+
+  DATA lr_data   TYPE REF TO data.
+  DATA lt_map    TYPE ty_colmap_tab.
+  DATA lt_cols   TYPE STANDARD TABLE OF ty_col WITH EMPTY KEY.
+  DATA ls_out    TYPE ty_out.
+  DATA lv_text   TYPE string.
+  DATA lv_key    TYPE string.
+  DATA lv_col    TYPE i.
+  DATA lv_row    TYPE i.
+  DATA lv_packno TYPE abap_bool.
+
+  FIELD-SYMBOLS <lt_excel> TYPE STANDARD TABLE.
+  FIELD-SYMBOLS <ls_excel> TYPE any.
+  FIELD-SYMBOLS <lv_cell>  TYPE any.
+  FIELD-SYMBOLS <lv_field> TYPE any.
+
+  PERFORM read_xlsx CHANGING lr_data.
+  ASSIGN lr_data->* TO <lt_excel>.
+  IF <lt_excel> IS NOT ASSIGNED OR lines( <lt_excel> ) < 2.
+    MESSAGE 'The file contains no data below the heading row' TYPE 'S' DISPLAY LIKE 'E'.
+    LEAVE LIST-PROCESSING.
+  ENDIF.
+
+  " Heading row -> column map
+  PERFORM heading_map CHANGING lt_map.
+  READ TABLE <lt_excel> ASSIGNING <ls_excel> INDEX 1.
+  DO.
+    lv_col = sy-index.
+    ASSIGN COMPONENT lv_col OF STRUCTURE <ls_excel> TO <lv_cell>.
+    IF sy-subrc <> 0.
+      EXIT.
+    ENDIF.
+    lv_text = <lv_cell>.
+    PERFORM normalize USING lv_text CHANGING lv_key.
+    READ TABLE lt_map INTO DATA(ls_map) WITH TABLE KEY key = lv_key.
+    IF sy-subrc = 0 AND ls_map-name <> '*'.
+      APPEND VALUE #( col = lv_col name = ls_map-name ) TO lt_cols.
+      IF ls_map-name = 'PACKNO'.
+        lv_packno = abap_true.
+      ENDIF.
+    ENDIF.
+  ENDDO.
+
+  IF lv_packno = abap_false.
+    MESSAGE 'Column "Packing List No." not found in the heading row - use the file downloaded from the ALV'
+      TYPE 'S' DISPLAY LIKE 'E'.
+    LEAVE LIST-PROCESSING.
+  ENDIF.
+
+  " Data rows
+  DELETE <lt_excel> INDEX 1.
+  CLEAR gt_out.
+
+  LOOP AT <lt_excel> ASSIGNING <ls_excel>.
+    lv_row = sy-tabix + 1.
+    CLEAR ls_out.
+    LOOP AT lt_cols INTO DATA(ls_col).
+      ASSIGN COMPONENT ls_col-col OF STRUCTURE <ls_excel> TO <lv_cell>.
+      IF sy-subrc <> 0.
+        CONTINUE.
+      ENDIF.
+      lv_text = <lv_cell>.
+      CONDENSE lv_text.
+      IF lv_text IS INITIAL.
+        CONTINUE.
+      ENDIF.
+      ASSIGN COMPONENT ls_col-name OF STRUCTURE ls_out TO <lv_field>.
+      PERFORM convert_cell USING lv_text lv_row ls_col-name CHANGING <lv_field>.
+    ENDLOOP.
+
+    IF ls_out IS INITIAL.
+      CONTINUE.                                            " empty row
+    ENDIF.
+    IF ls_out-packno IS INITIAL.
+      APPEND VALUE #( type = 'W' ref = |Row { lv_row }| text = 'No packing list number - row not printed' ) TO gt_log.
+      CONTINUE.
+    ENDIF.
+    APPEND ls_out TO gt_out.
+  ENDLOOP.
+
+  IF gt_out IS INITIAL.
+    MESSAGE 'No row with a packing list number in the file' TYPE 'S' DISPLAY LIKE 'E'.
+    LEAVE LIST-PROCESSING.
+  ENDIF.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Excel file -> first worksheet as internal table (binary upload)
+*&---------------------------------------------------------------------*
+FORM read_xlsx CHANGING cr_data TYPE REF TO data.
+
+  DATA lt_bin     TYPE solix_tab.
+  DATA lv_size    TYPE i.
+  DATA lv_xstring TYPE xstring.
+  DATA lv_file    TYPE string.
+  DATA lo_excel   TYPE REF TO cl_fdt_xl_spreadsheet.
+  DATA lt_sheets  TYPE if_fdt_doc_spreadsheet=>t_worksheet_names.
+  DATA lv_sheet   TYPE string.
+
+  lv_file = p_file.
+
+  cl_gui_frontend_services=>gui_upload(
+    EXPORTING
+      filename        = lv_file
+      filetype        = 'BIN'
+    IMPORTING
+      filelength      = lv_size
+    CHANGING
+      data_tab        = lt_bin
+    EXCEPTIONS
+      file_open_error = 1
+      file_read_error = 2
+      OTHERS          = 3 ).
+  IF sy-subrc <> 0 OR lv_size = 0.
+    MESSAGE |File { lv_file } could not be read| TYPE 'S' DISPLAY LIKE 'E'.
+    LEAVE LIST-PROCESSING.
+  ENDIF.
+  lv_xstring = cl_bcs_convert=>solix_to_xstring( it_solix = lt_bin
+                                                 iv_size  = lv_size ).
+
+  TRY.
+      CREATE OBJECT lo_excel
+        EXPORTING
+          document_name = lv_file
+          xdocument     = lv_xstring.
+    CATCH cx_fdt_excel_core.
+      MESSAGE 'The file is not a valid Excel (.xlsx) file' TYPE 'S' DISPLAY LIKE 'E'.
+      LEAVE LIST-PROCESSING.
+  ENDTRY.
+
+  lo_excel->if_fdt_doc_spreadsheet~get_worksheet_names(
+    IMPORTING worksheet_names = lt_sheets ).
+  READ TABLE lt_sheets INTO lv_sheet INDEX 1.
+  IF sy-subrc <> 0.
+    MESSAGE 'The Excel file has no worksheet' TYPE 'S' DISPLAY LIKE 'E'.
+    LEAVE LIST-PROCESSING.
+  ENDIF.
+
+  cr_data = lo_excel->if_fdt_doc_spreadsheet~get_itab_from_worksheet( lv_sheet ).
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Heading text -> field: ALV long text (40), medium (20), short (10)
+*& and the technical field name are accepted. A heading that fits more
+*& than one field is marked ambiguous ('*').
+*&---------------------------------------------------------------------*
+FORM heading_map CHANGING ct_map TYPE ty_colmap_tab.
+
+  DATA lt_keys TYPE ty_string_tab.
+  DATA lv_text TYPE string.
+  DATA lv_key  TYPE string.
+
+  CLEAR ct_map.
+  LOOP AT gt_labels INTO DATA(ls_label).
+    CLEAR lt_keys.
+    lv_text = ls_label-name.
+    APPEND lv_text TO lt_keys.
+    APPEND ls_label-text TO lt_keys.
+    IF strlen( ls_label-text ) > 20.
+      APPEND substring( val = ls_label-text len = 20 ) TO lt_keys.
+    ENDIF.
+    IF strlen( ls_label-text ) > 10.
+      APPEND substring( val = ls_label-text len = 10 ) TO lt_keys.
+    ENDIF.
+    LOOP AT lt_keys INTO lv_text.
+      PERFORM normalize USING lv_text CHANGING lv_key.
+      READ TABLE ct_map ASSIGNING FIELD-SYMBOL(<ls_map>) WITH TABLE KEY key = lv_key.
+      IF sy-subrc <> 0.
+        INSERT VALUE #( key = lv_key name = ls_label-name ) INTO TABLE ct_map.
+      ELSEIF <ls_map>-name <> ls_label-name.
+        <ls_map>-name = '*'.
+      ENDIF.
+    ENDLOOP.
+  ENDLOOP.
+
+ENDFORM.
+
+FORM normalize USING    iv_text TYPE string
+               CHANGING cv_key  TYPE string.
+  cv_key = replace( val = to_upper( iv_text ) regex = `[^A-Z0-9]` with = `` occ = 0 ).
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Excel cell -> field of TY_OUT according to its type
+*&---------------------------------------------------------------------*
+FORM convert_cell USING    iv_text  TYPE string
+                           iv_row   TYPE i
+                           iv_name  TYPE lvc_fname
+                  CHANGING cv_field TYPE any.
+
+  DATA lv_kind TYPE c LENGTH 1.
+  DATA lv_date TYPE d.
+  DATA lv_dec  TYPE p LENGTH 16 DECIMALS 3.
+  DATA lv_ok   TYPE abap_bool.
+  DATA lv_ref  TYPE string.
+
+  lv_ref = |Row { iv_row } / { iv_name }|.
+  DESCRIBE FIELD cv_field TYPE lv_kind.
+
+  CASE lv_kind.
+    WHEN 'D'.
+      PERFORM to_date USING iv_text lv_ref CHANGING lv_date lv_ok.
+      cv_field = lv_date.
+    WHEN 'I' OR 'P' OR 'N' OR 'F'.
+      PERFORM to_dec USING iv_text lv_ref CHANGING lv_dec.
+      cv_field = lv_dec.
+    WHEN OTHERS.
+      cv_field = iv_text.
+  ENDCASE.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& One Adobe Form per packing list number with the data of the file
+*&---------------------------------------------------------------------*
+FORM print_forms.
+
+  DATA lt_packno TYPE ty_string_tab.
+  DATA lt_rows   TYPE ty_out_tab.
+  DATA ls_hdr    TYPE zsd_s_epack_af_hdr.
+  DATA lt_itm    TYPE zsd_tt_epack_af_itm.
+  DATA lv_goods  TYPE string.
+  DATA lv_ok     TYPE abap_bool.
+  DATA lv_count  TYPE i.
+
+  " Packing lists in the order of the file
+  LOOP AT gt_out INTO DATA(ls_out).
+    IF NOT line_exists( lt_packno[ table_line = ls_out-packno ] ).
+      APPEND ls_out-packno TO lt_packno.
+    ENDIF.
+  ENDLOOP.
+
+  LOOP AT lt_packno INTO DATA(lv_packno).
+    CLEAR lt_rows.
+    LOOP AT gt_out INTO ls_out WHERE packno = lv_packno.
+      APPEND ls_out TO lt_rows.
+    ENDLOOP.
+
+    PERFORM form_header USING lt_rows CHANGING ls_hdr.
+    lv_goods = ls_hdr-goods_desc.
+    PERFORM form_items  USING lt_rows lv_goods CHANGING lt_itm.
+    IF lt_itm IS INITIAL.
+      APPEND VALUE #( type = 'E' ref = lv_packno text = 'No line item (Sl.No. / Part No.) - not printed' ) TO gt_log.
+      CONTINUE.
+    ENDIF.
+
+    PERFORM send_form USING lv_packno ls_hdr lt_itm CHANGING lv_ok.
+    IF lv_ok = abap_true.
+      lv_count = lv_count + 1.
+      APPEND VALUE #( type = 'S' ref = lv_packno text = |Form { gc_form } output on { gc_dest }| ) TO gt_log.
+    ENDIF.
+  ENDLOOP.
+
+  MESSAGE |{ lv_count } of { lines( lt_packno ) } packing list(s) printed| TYPE 'S'.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Form header from the rows of one packing list: for each field the
+*& first filled value of the rows (header columns may be filled on the
+*& first row only)
+*&---------------------------------------------------------------------*
+FORM form_header USING    it_rows TYPE ty_out_tab
+                 CHANGING cs_hdr  TYPE zsd_s_epack_af_hdr.
+
+  DATA ls_h      TYPE ty_out.
+  DATA lt_parts  TYPE ty_string_tab.
+  DATA lt_np     TYPE ty_string_tab.
+  DATA lv_text   TYPE string.
+  DATA lv_nl     TYPE string.
+  DATA lv_art    TYPE i.
+  DATA lv_qty    TYPE p LENGTH 16 DECIMALS 3.
+  DATA lv_gwt    TYPE p LENGTH 16 DECIMALS 3.
+  DATA lv_nwt    TYPE p LENGTH 16 DECIMALS 3.
+
+  FIELD-SYMBOLS <lv_h> TYPE any.
+  FIELD-SYMBOLS <lv_r> TYPE any.
+
+  CLEAR cs_hdr.
+  lv_nl = cl_abap_char_utilities=>newline.
+
+  LOOP AT it_rows INTO DATA(ls_row).
+    DO.
+      ASSIGN COMPONENT sy-index OF STRUCTURE ls_h TO <lv_h>.
+      IF sy-subrc <> 0.
+        EXIT.
+      ENDIF.
+      ASSIGN COMPONENT sy-index OF STRUCTURE ls_row TO <lv_r>.
+      IF <lv_h> IS INITIAL AND <lv_r> IS NOT INITIAL.
+        <lv_h> = <lv_r>.
+      ENDIF.
+    ENDDO.
+    lv_art = lv_art + ls_row-articles.
+    lv_qty = lv_qty + ls_row-quantity.
+    lv_gwt = lv_gwt + ls_row-gross_wt.
+    lv_nwt = lv_nwt + ls_row-net_wt.
+  ENDLOOP.
+
+  " Document
+  cs_hdr-packno = ls_h-packno.
+  PERFORM date_text USING ls_h-packdt CHANGING lv_text.
+  cs_hdr-packdt = lv_text.
+
+  " Notifier parties -> form format (FS 1.1)
+  cs_hdr-np1 = ls_h-np1.
+  cs_hdr-np2 = ls_h-np2.
+  cs_hdr-np3 = ls_h-np3.
+  cs_hdr-np4 = ls_h-np4.
+  cs_hdr-np5 = ls_h-np5.
+  lt_np = VALUE #( ( ls_h-np1 ) ( ls_h-np2 ) ( ls_h-np3 ) ( ls_h-np4 ) ( ls_h-np5 ) ).
+  DELETE lt_np WHERE table_line IS INITIAL.
+  cs_hdr-np_count = lines( lt_np ).
+  cs_hdr-format   = COND #( WHEN cs_hdr-np_count > 0 THEN 'N' ELSE 'O' ).
+
+  " Exporter
+  cs_hdr-exp_name  = ls_h-exp_name1.
+  cs_hdr-sign_for  = ls_h-exp_name1.
+  lt_parts = VALUE #( ( CONV string( ls_h-exp_street ) )
+                      ( CONV string( ls_h-exp_str_supl1 ) )
+                      ( condense( |{ ls_h-exp_city1 } { COND string( WHEN ls_h-exp_post_code IS NOT INITIAL
+                                                                       THEN |- { ls_h-exp_post_code }| ) }| ) )
+                      ( CONV string( ls_h-exp_region_tx ) )
+                      ( CONV string( ls_h-exp_country_tx ) ) ).
+  PERFORM join USING lt_parts lv_nl CHANGING cs_hdr-exp_address.
+  cs_hdr-exp_gstin = ls_h-gstin.
+  cs_hdr-exp_iec   = ls_h-iec.
+  cs_hdr-exp_cin   = ls_h-cin.
+
+  " Consignee = ship-to, buyer = sold-to
+  cs_hdr-same_party = xsdbool( ls_h-sp_kunnr = ls_h-sh_kunnr AND ls_h-sh_kunnr IS NOT INITIAL ).
+  cs_hdr-cns_name   = ls_h-sh_name1.
+  lt_parts = VALUE #( ( CONV string( ls_h-sh_street ) ) ( CONV string( ls_h-sh_str_supl1 ) )
+                      ( CONV string( ls_h-sh_city2 ) )
+                      ( condense( |{ ls_h-sh_post_code } { ls_h-sh_city1 }| ) )
+                      ( CONV string( ls_h-sh_country_tx ) ) ).
+  PERFORM join USING lt_parts `, ` CHANGING cs_hdr-cns_address.
+  cs_hdr-cns_tel    = ls_h-sh_telephone.
+  cs_hdr-cns_mobile = ls_h-sh_mobile.
+  cs_hdr-cns_email  = ls_h-sh_email.
+  cs_hdr-buy_name   = ls_h-sp_name1.
+  lt_parts = VALUE #( ( CONV string( ls_h-sp_street ) ) ( CONV string( ls_h-sp_str_supl1 ) )
+                      ( CONV string( ls_h-sp_city2 ) )
+                      ( condense( |{ ls_h-sp_post_code } { ls_h-sp_city1 }| ) )
+                      ( CONV string( ls_h-sp_country_tx ) ) ).
+  PERFORM join USING lt_parts `, ` CHANGING cs_hdr-buy_address.
+  cs_hdr-buy_tel    = ls_h-sp_telephone.
+  cs_hdr-buy_mobile = ls_h-sp_mobile.
+  cs_hdr-buy_email  = ls_h-sp_email.
+
+  " References and countries
+  cs_hdr-order_ref = ls_h-order_no.
+  IF ls_h-order_date IS NOT INITIAL.
+    cs_hdr-order_ref = |{ cs_hdr-order_ref } DATE: { ls_h-order_date }|.
+  ENDIF.
+  cs_hdr-buyer_ref = ls_h-buyer_ref.
+  IF ls_h-buyer_ref_dt IS NOT INITIAL.
+    PERFORM date_text USING ls_h-buyer_ref_dt CHANGING lv_text.
+    cs_hdr-buyer_ref = |{ cs_hdr-buyer_ref } DATE: { lv_text }|.
+  ENDIF.
+  cs_hdr-cnty_orgn = ls_h-cnty_orgn.
+  cs_hdr-cnty_dest = ls_h-cnty_dest.
+
+  " Shipment
+  cs_hdr-pre_carr   = ls_h-pre_carriage.
+  cs_hdr-rec_place  = ls_h-place_receipt.
+  cs_hdr-vessel     = ls_h-vessel_flight.
+  cs_hdr-pol        = ls_h-port_loading.
+  cs_hdr-pod        = ls_h-port_disch.
+  cs_hdr-pld        = ls_h-place_deliv.
+  cs_hdr-marks      = ls_h-marks_nos.
+  cs_hdr-containers = ls_h-container_no.
+  cs_hdr-no_pkgs    = ls_h-no_packages.
+  cs_hdr-goods_desc = ls_h-goods_desc.
+  cs_hdr-pay_terms  = |PAYMENT TERM: { COND string( WHEN ls_h-payment_term IS NOT INITIAL
+                                                     THEN ls_h-payment_term ELSE ls_h-zterm ) }|.
+  cs_hdr-ship_terms = condense( |{ ls_h-inco1 } { ls_h-inco2 }| ).
+
+  " Totals row of the item table (A14) and declaration
+  IF ls_h-total_art IS NOT INITIAL.
+    lv_art = ls_h-total_art.
+  ENDIF.
+  cs_hdr-tot_art  = |{ lv_art }|.
+  cs_hdr-tot_text = |(Total { lv_art } Packages)|.
+  PERFORM qty_text USING lv_qty CHANGING lv_text.
+  cs_hdr-tot_qty  = lv_text.
+  cs_hdr-tot_gwt  = |{ lv_gwt DECIMALS = 3 }|.
+  cs_hdr-tot_nwt  = |{ lv_nwt DECIMALS = 3 }|.
+  cs_hdr-declaration = ls_h-declaration.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Form item rows: HSN heading rows and one row per line item.
+*& An empty Articles / weight cell belongs to the package above (merged
+*& cell in the samples) - A15.
+*&---------------------------------------------------------------------*
+FORM form_items USING    it_rows  TYPE ty_out_tab
+                         iv_goods TYPE string
+                CHANGING ct_itm   TYPE zsd_tt_epack_af_itm.
+
+  DATA ls_itm      TYPE zsd_s_epack_af_itm.
+  DATA ls_next     TYPE zsd_s_epack_af_itm.
+  DATA lt_goods    TYPE ty_string_tab.
+  DATA lv_prev_hsn TYPE string VALUE '#'.
+  DATA lv_hsn      TYPE string.
+  DATA lv_digits   TYPE string.
+  DATA lv_line_dig TYPE string.
+  DATA lv_text     TYPE string.
+  DATA lv_art_grp  TYPE i.
+  DATA lv_wt_grp   TYPE i.
+  DATA lv_next     TYPE i.
+
+  CLEAR ct_itm.
+  SPLIT iv_goods AT ` / ` INTO TABLE lt_goods.
+
+  LOOP AT it_rows INTO DATA(ls_row) WHERE sn IS NOT INITIAL OR part_no IS NOT INITIAL.
+
+    " Section heading when the HSN changes
+    lv_hsn = condense( val = ls_row-hsn del = ` ` ).
+    IF lv_hsn <> lv_prev_hsn.
+      CLEAR ls_itm.
+      ls_itm-row_type = 'H'.
+      lv_digits = replace( val = lv_hsn regex = `[^0-9]` with = `` occ = 0 ).
+      IF lv_digits IS NOT INITIAL.
+        LOOP AT lt_goods INTO lv_text.
+          lv_line_dig = replace( val = lv_text regex = `[^0-9]` with = `` occ = 0 ).
+          IF lv_line_dig CS lv_digits.
+            ls_itm-row_text = lv_text.
+            EXIT.
+          ENDIF.
+        ENDLOOP.
+      ENDIF.
+      IF ls_itm-row_text IS INITIAL AND lv_hsn IS NOT INITIAL.
+        PERFORM hsn_text USING lv_hsn CHANGING lv_text.
+        ls_itm-row_text = |HS CODE : { lv_text }|.
+      ENDIF.
+      IF ls_itm-row_text IS NOT INITIAL.
+        APPEND ls_itm TO ct_itm.
+      ENDIF.
+      lv_prev_hsn = lv_hsn.
+    ENDIF.
+
+    CLEAR ls_itm.
+    ls_itm-row_type   = 'I'.
+    ls_itm-sl_no      = |{ ls_row-sn }|.
+    IF ls_row-inv_sn IS NOT INITIAL.
+      ls_itm-inv_sn = |{ ls_row-inv_sn }|.
+    ENDIF.
+    ls_itm-article_no = ls_row-article_no.
+    IF ls_row-std IS NOT INITIAL.
+      ls_itm-std = |{ ls_row-std }|.
+    ENDIF.
+    ls_itm-part_no    = ls_row-part_no.
+    ls_itm-prod_desc  = ls_row-prod_desc.
+    PERFORM qty_text USING ls_row-quantity CHANGING lv_text.
+    ls_itm-quantity   = lv_text.
+    PERFORM hsn_text USING lv_hsn CHANGING lv_text.
+    ls_itm-hsn        = lv_text.
+
+    " Packages: a filled Articles / weight cell starts a new group
+    IF ls_row-articles IS NOT INITIAL OR lv_art_grp = 0.
+      lv_art_grp = lv_art_grp + 1.
+      ls_itm-art_first = abap_true.
+      IF ls_row-articles IS NOT INITIAL.
+        ls_itm-articles = |{ ls_row-articles }|.
+      ENDIF.
+    ENDIF.
+    IF ls_row-gross_wt IS NOT INITIAL OR ls_row-net_wt IS NOT INITIAL OR lv_wt_grp = 0.
+      lv_wt_grp = lv_wt_grp + 1.
+      ls_itm-wt_first = abap_true.
+      IF ls_row-gross_wt IS NOT INITIAL OR ls_row-net_wt IS NOT INITIAL.
+        ls_itm-gross_wt = |{ ls_row-gross_wt DECIMALS = 3 }|.
+        ls_itm-net_wt   = |{ ls_row-net_wt DECIMALS = 3 }|.
+      ENDIF.
+    ENDIF.
+    ls_itm-art_grp = lv_art_grp.
+    ls_itm-wt_grp  = lv_wt_grp.
+    APPEND ls_itm TO ct_itm.
+
+  ENDLOOP.
+
+  " Last row and number of rows of each group (borders of merged cells)
+  LOOP AT ct_itm ASSIGNING FIELD-SYMBOL(<ls_itm>) WHERE row_type = 'I'.
+    lv_next = sy-tabix + 1.
+    CLEAR ls_next.
+    READ TABLE ct_itm INTO ls_next INDEX lv_next.
+    IF sy-subrc <> 0 OR ls_next-row_type <> 'I'.
+      CLEAR ls_next.
+    ENDIF.
+    <ls_itm>-art_last = xsdbool( ls_next-art_grp <> <ls_itm>-art_grp ).
+    <ls_itm>-wt_last  = xsdbool( ls_next-wt_grp  <> <ls_itm>-wt_grp ).
+    <ls_itm>-art_rows = REDUCE i( INIT n = 0 FOR r IN ct_itm
+                                  WHERE ( row_type = 'I' AND art_grp = <ls_itm>-art_grp ) NEXT n = n + 1 ).
+    <ls_itm>-wt_rows  = REDUCE i( INIT n = 0 FOR r IN ct_itm
+                                  WHERE ( row_type = 'I' AND wt_grp = <ls_itm>-wt_grp ) NEXT n = n + 1 ).
+  ENDLOOP.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Adobe Form call for one packing list: print preview on LP01
+*&---------------------------------------------------------------------*
+FORM send_form USING    iv_packno TYPE string
+                        is_hdr    TYPE zsd_s_epack_af_hdr
+                        it_itm    TYPE zsd_tt_epack_af_itm
+               CHANGING cv_ok     TYPE abap_bool.
+
+  DATA lv_fm      TYPE funcname.
+  DATA ls_outpar  TYPE sfpoutputparams.
+  DATA ls_docpar  TYPE sfpdocparams.
+  DATA ls_formout TYPE fpformoutput.
+  DATA lv_subrc   TYPE sysubrc.
+
+  cv_ok = abap_false.
+
+  TRY.
+      CALL FUNCTION 'FP_FUNCTION_MODULE_NAME'
+        EXPORTING
+          i_name     = gc_form
+        IMPORTING
+          e_funcname = lv_fm.
+    CATCH cx_fp_api.
+      APPEND VALUE #( type = 'E' ref = iv_packno
+                      text = |Adobe Form { gc_form } does not exist or is not active| ) TO gt_log.
+      RETURN.
+  ENDTRY.
+
+  ls_outpar-nodialog = abap_true.
+  ls_outpar-preview  = abap_true.
+  ls_outpar-reqnew   = abap_true.
+  ls_outpar-dest     = gc_dest.
+
+  CALL FUNCTION 'FP_JOB_OPEN'
+    CHANGING
+      ie_outputparams = ls_outpar
+    EXCEPTIONS
+      cancel          = 1
+      usage_error     = 2
+      system_error    = 3
+      internal_error  = 4
+      OTHERS          = 5.
+  IF sy-subrc <> 0.
+    lv_subrc = sy-subrc.
+    APPEND VALUE #( type = 'E' ref = iv_packno text = |Print job could not be opened (FP_JOB_OPEN { lv_subrc })| ) TO gt_log.
+    RETURN.
+  ENDIF.
+
+  ls_docpar-langu   = gc_langu.
+  ls_docpar-country = gc_land_in.
+
+  CALL FUNCTION lv_fm
+    EXPORTING
+      /1bcdwb/docparams  = ls_docpar
+      is_header          = is_hdr
+      it_item            = it_itm
+    IMPORTING
+      /1bcdwb/formoutput = ls_formout
+    EXCEPTIONS
+      usage_error        = 1
+      system_error       = 2
+      internal_error     = 3
+      OTHERS             = 4.
+  lv_subrc = sy-subrc.
+
+  CALL FUNCTION 'FP_JOB_CLOSE'
+    EXCEPTIONS
+      usage_error    = 1
+      system_error   = 2
+      internal_error = 3
+      OTHERS         = 4.
+
+  IF lv_subrc <> 0.
+    APPEND VALUE #( type = 'E' ref = iv_packno text = |Form output failed ({ lv_subrc })| ) TO gt_log.
+    RETURN.
+  ENDIF.
+
+  cv_ok = abap_true.
+
+ENDFORM.
+
+*&=====================================================================*
+*& Common routines
+*&=====================================================================*
+
+*&---------------------------------------------------------------------*
+*& Column headings = ALV texts = expected Excel headings
+*&---------------------------------------------------------------------*
+FORM labels.
+
+  gt_labels = VALUE #(
+    ( name = 'SALES_ORDERS'   text = 'Sales Order' )
+    ( name = 'INVOICES'       text = 'SAP Invoice Number' )
+    ( name = 'EXP_NAME1'      text = 'Exporter Name' )
+    ( name = 'EXP_STREET'     text = 'Exporter Street' )
+    ( name = 'EXP_STR_SUPL1'  text = 'Exporter Street 2' )
+    ( name = 'EXP_CITY1'      text = 'Exporter City' )
+    ( name = 'EXP_POST_CODE'  text = 'Exporter Postal Code' )
+    ( name = 'EXP_REGION'     text = 'Exporter Region' )
+    ( name = 'EXP_REGION_TX'  text = 'Exporter Region Desc.' )
+    ( name = 'EXP_COUNTRY'    text = 'Exporter Country' )
+    ( name = 'EXP_COUNTRY_TX' text = 'Exporter Country Desc.' )
+    ( name = 'GSTIN'          text = 'GST No.' )
+    ( name = 'CIN'            text = 'CIN No.' )
+    ( name = 'PACKNO'         text = 'Packing List No.' )
+    ( name = 'PACKDT'         text = 'Packing List Date' )
+    ( name = 'IEC'            text = 'Exporter Ref. (IEC No.)' )
+    ( name = 'ORDER_NO'       text = 'Order No.' )
+    ( name = 'ORDER_DATE'     text = 'Order Date' )
+    ( name = 'BUYER_REF'      text = 'Buyer''s Reference No.' )
+    ( name = 'BUYER_REF_DT'   text = 'Buyer''s Reference Date' )
+    ( name = 'CNTY_ORGN'      text = 'Country of Origin of Goods' )
+    ( name = 'CNTY_DEST'      text = 'Country of Final Destination' )
+    ( name = 'SP_KUNNR'       text = 'Buyer (Sold-to)' )
+    ( name = 'SP_NAME1'       text = 'Buyer Name' )
+    ( name = 'SP_STREET'      text = 'Buyer Street' )
+    ( name = 'SP_STR_SUPL1'   text = 'Buyer Street 2' )
+    ( name = 'SP_CITY1'       text = 'Buyer City' )
+    ( name = 'SP_CITY2'       text = 'Buyer District' )
+    ( name = 'SP_POST_CODE'   text = 'Buyer Postal Code' )
+    ( name = 'SP_COUNTRY'     text = 'Buyer Country' )
+    ( name = 'SP_COUNTRY_TX'  text = 'Buyer Country Desc.' )
+    ( name = 'SP_EMAIL'       text = 'Buyer E-mail' )
+    ( name = 'SP_TELEPHONE'   text = 'Buyer Telephone' )
+    ( name = 'SP_MOBILE'      text = 'Buyer Mobile Number' )
+    ( name = 'SH_KUNNR'       text = 'Ship-to Party' )
+    ( name = 'SH_NAME1'       text = 'Ship-to Name' )
+    ( name = 'SH_STREET'      text = 'Ship-to Street' )
+    ( name = 'SH_STR_SUPL1'   text = 'Ship-to Street 2' )
+    ( name = 'SH_CITY1'       text = 'Ship-to City' )
+    ( name = 'SH_CITY2'       text = 'Ship-to District' )
+    ( name = 'SH_POST_CODE'   text = 'Ship-to Postal Code' )
+    ( name = 'SH_COUNTRY'     text = 'Ship-to Country' )
+    ( name = 'SH_COUNTRY_TX'  text = 'Ship-to Country Desc.' )
+    ( name = 'SH_EMAIL'       text = 'Ship-to E-mail' )
+    ( name = 'SH_TELEPHONE'   text = 'Ship-to Telephone' )
+    ( name = 'SH_MOBILE'      text = 'Ship-to Mobile Number' )
+    ( name = 'NP1'            text = 'Notifier Party 1' )
+    ( name = 'NP2'            text = 'Notifier Party 2' )
+    ( name = 'NP3'            text = 'Notifier Party 3' )
+    ( name = 'NP4'            text = 'Notifier Party 4' )
+    ( name = 'NP5'            text = 'Notifier Party 5' )
+    ( name = 'PRE_CARRIAGE'   text = 'Pre-Carriage' )
+    ( name = 'PLACE_RECEIPT'  text = 'Place of Receipt by Pre-carrier' )
+    ( name = 'VESSEL_FLIGHT'  text = 'Vessel / Flight No.' )
+    ( name = 'PORT_LOADING'   text = 'Port of Loading' )
+    ( name = 'PORT_DISCH'     text = 'Port of Discharge' )
+    ( name = 'PLACE_DELIV'    text = 'Place of Delivery' )
+    ( name = 'MARKS_NOS'      text = 'Marks & Nos.' )
+    ( name = 'CONTAINER_NO'   text = 'Container No.' )
+    ( name = 'NO_PACKAGES'    text = 'No. of Packages' )
+    ( name = 'GOODS_DESC'     text = 'Description of Goods' )
+    ( name = 'ZTERM'          text = 'Payment Term' )
+    ( name = 'PAYMENT_TERM'   text = 'Payment Term Desc.' )
+    ( name = 'INCO1'          text = 'Incoterms' )
+    ( name = 'INCO2'          text = 'Incoterms Location' )
+    ( name = 'SN'             text = 'Sl.No.' )
+    ( name = 'INV_SN'         text = 'Sr.No. INV' )
+    ( name = 'ARTICLE_NO'     text = 'Article No.' )
+    ( name = 'STD'            text = 'STD' )
+    ( name = 'ARTICLES'       text = 'Articles' )
+    ( name = 'TOTAL_ART'      text = 'Total Articles' )
+    ( name = 'PART_NO'        text = 'Part No.' )
+    ( name = 'PROD_DESC'      text = 'Product Description' )
+    ( name = 'QUANTITY'       text = 'Quantity Pcs' )
+    ( name = 'GROSS_WT'       text = 'Gross Wt. KGS' )
+    ( name = 'NET_WT'         text = 'Net Wt. KGS' )
+    ( name = 'HSN'            text = 'H.S Code' )
+    ( name = 'DECLARATION'    text = 'Declaration' ) ).
+
+ENDFORM.
+
+FORM column_text USING io_alv  TYPE REF TO cl_salv_table
+                       iv_name TYPE csequence
+                       iv_text TYPE csequence.
+
+  DATA lo_column TYPE REF TO cl_salv_column.
+  DATA lv_name   TYPE lvc_fname.
+  DATA lv_long   TYPE scrtext_l.
+  DATA lv_medium TYPE scrtext_m.
+  DATA lv_short  TYPE scrtext_s.
+
+  TRY.
+      lv_name   = iv_name.
+      lo_column = io_alv->get_columns( )->get_column( lv_name ).
+      lv_long   = iv_text.
+      lv_medium = iv_text.
+      lv_short  = iv_text.
+      lo_column->set_long_text( lv_long ).
+      lo_column->set_medium_text( lv_medium ).
+      lo_column->set_short_text( lv_short ).
+      lo_column->set_output_length( 20 ).          " visible also when empty
+    CATCH cx_salv_not_found.
+      RETURN.
+  ENDTRY.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Message log as popup
+*&---------------------------------------------------------------------*
+FORM show_log.
+
+  DATA lo_log  TYPE REF TO cl_salv_table.
+  DATA lx_salv TYPE REF TO cx_salv_error.
+
+  IF gt_log IS INITIAL.
+    RETURN.
+  ENDIF.
+
+  TRY.
+      cl_salv_table=>factory( IMPORTING r_salv_table = lo_log
+                              CHANGING  t_table      = gt_log ).
+      lo_log->set_screen_popup( start_column = 5  end_column = 150
+                                start_line   = 3  end_line   = 20 ).
+      lo_log->get_columns( )->set_optimize( abap_true ).
+      PERFORM column_text USING lo_log 'TYPE' 'Type'.
+      PERFORM column_text USING lo_log 'REF'  'Reference'.
+      PERFORM column_text USING lo_log 'TEXT' 'Message'.
+      lo_log->display( ).
+    CATCH cx_salv_error INTO lx_salv.
+      MESSAGE lx_salv TYPE 'S' DISPLAY LIKE 'E'.
+  ENDTRY.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Conversions (with a warning when not convertible)
+*&---------------------------------------------------------------------*
+FORM to_dec USING    iv_text  TYPE string
+                     iv_ref   TYPE string
+            CHANGING cv_value TYPE p.
 
   DATA lv_text TYPE string.
   DATA lv_num  TYPE decfloat34.
@@ -1329,17 +1712,16 @@ FORM to_dec USING    iv_text   TYPE string
       lv_num   = lv_text.
       cv_value = lv_num.
     CATCH cx_sy_conversion_error cx_sy_arithmetic_error.
-      APPEND VALUE #( type = 'W' packno = iv_packno
-                      text = |{ iv_field }: "{ iv_text }" is not a number - left empty| ) TO gt_log.
+      APPEND VALUE #( type = 'W' ref = iv_ref
+                      text = |"{ iv_text }" is not a number - left empty| ) TO gt_log.
   ENDTRY.
 
 ENDFORM.
 
-FORM to_date USING    iv_text   TYPE string
-                      iv_packno TYPE string
-                      iv_field  TYPE csequence
-             CHANGING cv_date   TYPE d
-                      cv_ok     TYPE abap_bool.
+FORM to_date USING    iv_text TYPE string
+                      iv_ref  TYPE string
+             CHANGING cv_date TYPE d
+                      cv_ok   TYPE abap_bool.
 
   DATA lv_text TYPE string.
   DATA lv_day  TYPE string.
@@ -1359,7 +1741,9 @@ FORM to_date USING    iv_text   TYPE string
   " "2026-09-10 00:00:00" -> date part only
   lv_text = segment( val = lv_text index = 1 sep = ` ` ).
 
-  IF matches( val = lv_text regex = `\d+(\.\d+)?` ).
+  IF matches( val = lv_text regex = `(19|20)\d{6}` ).
+    cv_date = lv_text.                                      " YYYYMMDD
+  ELSEIF matches( val = lv_text regex = `\d+(\.\d+)?` ).
     " Excel date number: days since 30.12.1899
     TRY.
         lv_num = lv_text.
@@ -1399,167 +1783,57 @@ FORM to_date USING    iv_text   TYPE string
   ENDIF.
 
   CLEAR cv_date.
-  APPEND VALUE #( type = 'W' packno = iv_packno
-                  text = |{ iv_field }: "{ iv_text }" is not a date - left empty| ) TO gt_log.
+  APPEND VALUE #( type = 'W' ref = iv_ref
+                  text = |"{ iv_text }" is not a date - left empty| ) TO gt_log.
 
 ENDFORM.
 
-*&---------------------------------------------------------------------*
-*& 5. Messages (popup) and final table (ALV grid, export to spreadsheet
-*&    via the standard ALV functions)
-*&---------------------------------------------------------------------*
-FORM display.
-
-  DATA lo_alv  TYPE REF TO cl_salv_table.
-  DATA lo_log  TYPE REF TO cl_salv_table.
-  DATA lx_salv TYPE REF TO cx_salv_error.
-
-  " Messages first
-  IF gt_log IS NOT INITIAL.
-    TRY.
-        cl_salv_table=>factory( IMPORTING r_salv_table = lo_log
-                                CHANGING  t_table      = gt_log ).
-        lo_log->set_screen_popup( start_column = 5  end_column = 150
-                                  start_line   = 3  end_line   = 20 ).
-        lo_log->get_columns( )->set_optimize( abap_true ).
-        PERFORM column_text USING lo_log 'TYPE'   'Type'.
-        PERFORM column_text USING lo_log 'PACKNO' 'Packing list'.
-        PERFORM column_text USING lo_log 'TEXT'   'Message'.
-        lo_log->display( ).
-      CATCH cx_salv_error INTO lx_salv.
-        MESSAGE lx_salv TYPE 'S' DISPLAY LIKE 'E'.
-    ENDTRY.
+FORM date_text USING    iv_date TYPE d
+               CHANGING cv_text TYPE string.
+  CLEAR cv_text.
+  IF iv_date IS NOT INITIAL.
+    cv_text = |{ iv_date+6(2) }-{ iv_date+4(2) }-{ iv_date(4) }|.
   ENDIF.
+ENDFORM.
 
-  IF gt_out IS INITIAL.
-    MESSAGE 'No data to display' TYPE 'S' DISPLAY LIKE 'E'.
-    RETURN.
+FORM qty_text USING    iv_qty  TYPE p
+              CHANGING cv_text TYPE string.
+  IF frac( iv_qty ) = 0.
+    cv_text = |{ CONV i( iv_qty ) }|.
+  ELSE.
+    cv_text = |{ iv_qty DECIMALS = 3 }|.
   ENDIF.
-
-  TRY.
-      cl_salv_table=>factory( IMPORTING r_salv_table = lo_alv
-                              CHANGING  t_table      = gt_out ).
-      " All standard functions incl. export to spreadsheet
-      lo_alv->get_functions( )->set_all( abap_true ).
-      lo_alv->get_columns( )->set_optimize( abap_true ).
-      lo_alv->get_display_settings( )->set_striped_pattern( abap_true ).
-      lo_alv->get_display_settings( )->set_list_header( 'Export Packing List' ).
-      PERFORM column_texts USING lo_alv.
-      lo_alv->display( ).
-    CATCH cx_salv_error INTO lx_salv.
-      MESSAGE lx_salv TYPE 'S' DISPLAY LIKE 'E'.
-  ENDTRY.
-
 ENDFORM.
 
-*&---------------------------------------------------------------------*
-*& Column headings of the output (logic sheet labels)
-*&---------------------------------------------------------------------*
-FORM column_texts USING io_alv TYPE REF TO cl_salv_table.
-
-  PERFORM column_text USING io_alv 'SALES_ORDERS'   'Sales Order(s)'.
-  PERFORM column_text USING io_alv 'INVOICES'       'SAP Invoice Number(s)'.
-  PERFORM column_text USING io_alv 'EXP_NAME1'      'Exporter Name'.
-  PERFORM column_text USING io_alv 'EXP_STREET'     'Exporter Street'.
-  PERFORM column_text USING io_alv 'EXP_STR_SUPL1'  'Exporter Street 2'.
-  PERFORM column_text USING io_alv 'EXP_CITY1'      'Exporter City'.
-  PERFORM column_text USING io_alv 'EXP_POST_CODE'  'Exporter Postal Code'.
-  PERFORM column_text USING io_alv 'EXP_REGION'     'Exporter Region'.
-  PERFORM column_text USING io_alv 'EXP_REGION_TX'  'Exporter Region Desc.'.
-  PERFORM column_text USING io_alv 'EXP_COUNTRY'    'Exporter Country'.
-  PERFORM column_text USING io_alv 'EXP_COUNTRY_TX' 'Exporter Country Desc.'.
-  PERFORM column_text USING io_alv 'GSTIN'          'GST No.'.
-  PERFORM column_text USING io_alv 'CIN'            'CIN No.'.
-  PERFORM column_text USING io_alv 'PACKNO'         'Packing List No.'.
-  PERFORM column_text USING io_alv 'PACKDT'         'Packing List Date'.
-  PERFORM column_text USING io_alv 'IEC'            'Exporter Ref. (IEC No.)'.
-  PERFORM column_text USING io_alv 'ORDER_NO'       'Order No.'.
-  PERFORM column_text USING io_alv 'ORDER_DATE'     'Order Date'.
-  PERFORM column_text USING io_alv 'BUYER_REF'      'Buyer''s Reference No.'.
-  PERFORM column_text USING io_alv 'BUYER_REF_DT'   'Buyer''s Reference Date'.
-  PERFORM column_text USING io_alv 'CNTY_ORGN'      'Country of Origin of Goods'.
-  PERFORM column_text USING io_alv 'CNTY_DEST'      'Country of Final Destination'.
-  PERFORM column_text USING io_alv 'SP_KUNNR'       'Buyer (Sold-to)'.
-  PERFORM column_text USING io_alv 'SP_NAME1'       'Buyer Name'.
-  PERFORM column_text USING io_alv 'SP_STREET'      'Buyer Street'.
-  PERFORM column_text USING io_alv 'SP_STR_SUPL1'   'Buyer Street 2'.
-  PERFORM column_text USING io_alv 'SP_CITY1'       'Buyer City'.
-  PERFORM column_text USING io_alv 'SP_CITY2'       'Buyer District'.
-  PERFORM column_text USING io_alv 'SP_POST_CODE'   'Buyer Postal Code'.
-  PERFORM column_text USING io_alv 'SP_COUNTRY'     'Buyer Country'.
-  PERFORM column_text USING io_alv 'SP_COUNTRY_TX'  'Buyer Country Desc.'.
-  PERFORM column_text USING io_alv 'SP_EMAIL'       'Buyer E-mail'.
-  PERFORM column_text USING io_alv 'SP_TELEPHONE'   'Buyer Telephone'.
-  PERFORM column_text USING io_alv 'SP_MOBILE'      'Buyer Mobile Number'.
-  PERFORM column_text USING io_alv 'SH_KUNNR'       'Ship-to Party'.
-  PERFORM column_text USING io_alv 'SH_NAME1'       'Ship-to Name'.
-  PERFORM column_text USING io_alv 'SH_STREET'      'Ship-to Street'.
-  PERFORM column_text USING io_alv 'SH_STR_SUPL1'   'Ship-to Street 2'.
-  PERFORM column_text USING io_alv 'SH_CITY1'       'Ship-to City'.
-  PERFORM column_text USING io_alv 'SH_CITY2'       'Ship-to District'.
-  PERFORM column_text USING io_alv 'SH_POST_CODE'   'Ship-to Postal Code'.
-  PERFORM column_text USING io_alv 'SH_COUNTRY'     'Ship-to Country'.
-  PERFORM column_text USING io_alv 'SH_COUNTRY_TX'  'Ship-to Country Desc.'.
-  PERFORM column_text USING io_alv 'SH_EMAIL'       'Ship-to E-mail'.
-  PERFORM column_text USING io_alv 'SH_TELEPHONE'   'Ship-to Telephone'.
-  PERFORM column_text USING io_alv 'SH_MOBILE'      'Ship-to Mobile Number'.
-  PERFORM column_text USING io_alv 'NP1'            'Notifier Party 1'.
-  PERFORM column_text USING io_alv 'NP2'            'Notifier Party 2'.
-  PERFORM column_text USING io_alv 'NP3'            'Notifier Party 3'.
-  PERFORM column_text USING io_alv 'NP4'            'Notifier Party 4'.
-  PERFORM column_text USING io_alv 'NP5'            'Notifier Party 5'.
-  PERFORM column_text USING io_alv 'PRE_CARRIAGE'   'Pre-Carriage'.
-  PERFORM column_text USING io_alv 'PLACE_RECEIPT'  'Place of Receipt by Pre-carrier'.
-  PERFORM column_text USING io_alv 'VESSEL_FLIGHT'  'Vessel / Flight No.'.
-  PERFORM column_text USING io_alv 'PORT_LOADING'   'Port of Loading'.
-  PERFORM column_text USING io_alv 'PORT_DISCH'     'Port of Discharge'.
-  PERFORM column_text USING io_alv 'PLACE_DELIV'    'Place of Delivery'.
-  PERFORM column_text USING io_alv 'MARKS_NOS'      'Marks & Nos.'.
-  PERFORM column_text USING io_alv 'CONTAINER_NO'   'Container No.'.
-  PERFORM column_text USING io_alv 'NO_PACKAGES'    'No. of Packages'.
-  PERFORM column_text USING io_alv 'GOODS_DESC'     'Description of Goods'.
-  PERFORM column_text USING io_alv 'ZTERM'          'Payment Term'.
-  PERFORM column_text USING io_alv 'PAYMENT_TERM'   'Payment Term Desc.'.
-  PERFORM column_text USING io_alv 'INCO1'          'Incoterms'.
-  PERFORM column_text USING io_alv 'INCO2'          'Incoterms Location'.
-  PERFORM column_text USING io_alv 'SN'             'Sl.No.'.
-  PERFORM column_text USING io_alv 'INV_SN'         'Sr.No. INV'.
-  PERFORM column_text USING io_alv 'ARTICLE_NO'     'Article No.'.
-  PERFORM column_text USING io_alv 'STD'            'STD'.
-  PERFORM column_text USING io_alv 'ARTICLES'       'Articles'.
-  PERFORM column_text USING io_alv 'TOTAL_ART'      'Total Articles'.
-  PERFORM column_text USING io_alv 'PART_NO'        'Part No.'.
-  PERFORM column_text USING io_alv 'PROD_DESC'      'Product Description'.
-  PERFORM column_text USING io_alv 'QUANTITY'       'Quantity Pcs'.
-  PERFORM column_text USING io_alv 'GROSS_WT'       'Gross Wt. KGS'.
-  PERFORM column_text USING io_alv 'NET_WT'         'Net Wt. KGS'.
-  PERFORM column_text USING io_alv 'HSN'            'H.S Code'.
-  PERFORM column_text USING io_alv 'DECLARATION'    'Declaration'.
-
+FORM hsn_text USING    iv_hsn  TYPE string
+              CHANGING cv_text TYPE string.
+  " "39172390" -> "3917 2390" (format of the samples)
+  DATA(lv_digits) = replace( val = iv_hsn regex = `\s` with = `` occ = 0 ).
+  IF strlen( lv_digits ) = 8 AND lv_digits CO '0123456789'.
+    cv_text = |{ lv_digits(4) } { lv_digits+4(4) }|.
+  ELSE.
+    cv_text = iv_hsn.
+  ENDIF.
 ENDFORM.
 
-FORM column_text USING io_alv   TYPE REF TO cl_salv_table
-                       iv_name  TYPE csequence
-                       iv_text  TYPE csequence.
+FORM join USING    it_parts TYPE ty_string_tab
+                   iv_sep   TYPE csequence
+          CHANGING cv_text  TYPE any.
 
-  DATA lo_column TYPE REF TO cl_salv_column.
-  DATA lv_name   TYPE lvc_fname.
-  DATA lv_long   TYPE scrtext_l.
-  DATA lv_medium TYPE scrtext_m.
-  DATA lv_short  TYPE scrtext_s.
+  DATA lv_text TYPE string.
 
-  TRY.
-      lv_name   = iv_name.
-      lo_column = io_alv->get_columns( )->get_column( lv_name ).
-      lv_long   = iv_text.
-      lv_medium = iv_text.
-      lv_short  = iv_text.
-      lo_column->set_long_text( lv_long ).
-      lo_column->set_medium_text( lv_medium ).
-      lo_column->set_short_text( lv_short ).
-    CATCH cx_salv_not_found.
-      RETURN.
-  ENDTRY.
+  LOOP AT it_parts INTO DATA(lv_part).
+    lv_part = condense( lv_part ).
+    IF lv_part IS INITIAL.
+      CONTINUE.
+    ENDIF.
+    IF lv_text IS INITIAL.
+      lv_text = lv_part.
+    ELSE.
+      lv_text = |{ lv_text }{ iv_sep }{ lv_part }|.
+    ENDIF.
+  ENDLOOP.
+  cv_text = lv_text.
 
 ENDFORM.
 
@@ -1591,6 +1865,6 @@ ENDFORM.
 *&---------------------------------------------------------------------*
 *& Text elements (Goto -> Text elements)
 *&   Text symbol    B01      Selection
-*&   Selection text S_VBELN  Sales Order
-*&   Selection text P_FILE   Packing list Excel file (.xlsx)
+*&   Selection text S_VBELN  Sales Order (step 1: fetch data)
+*&   Selection text P_FILE   Filled Excel file (step 2: print)
 *&---------------------------------------------------------------------*
