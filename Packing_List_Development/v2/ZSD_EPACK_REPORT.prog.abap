@@ -47,22 +47,22 @@ CONSTANTS:
 TYPES:
   BEGIN OF ty_out,
     " Reference
-    sales_orders  TYPE string,             " sales order of the row
-    invoices      TYPE string,             " billing document of the row
+    sales_orders  TYPE c LENGTH 10,        " sales order of the row
+    invoices      TYPE c LENGTH 10,        " billing document of the row
     " Header - Exporter (B3-B5), ONE column, fixed positions (A17):
     " name, street, street 2, city, postal code, region text, country text
     exporter      TYPE c LENGTH 100,
     gstin         TYPE j_1bbranch-gstin,
     cin           TYPE t001z-paval,
     " Header (B9-B17)
-    packno        TYPE string,             " ZSD_PACKNO - filled by user
+    packno        TYPE c LENGTH 10,        " ZSD_PACKNO - filled by user
     packdt        TYPE d,                  " ZSD_PACKDT - filled by user
     iec           TYPE adrc-building,
-    order_no      TYPE string,
-    order_date    TYPE string,
+    order_no      TYPE vbkd-bstkd,
+    order_date    TYPE c LENGTH 10,
     buyer_ref     TYPE string,             " ZSD_PARTY_REF - by user
     buyer_ref_dt  TYPE d,                  " ZSD_REF_DT    - by user
-    cnty_orgn     TYPE string,             " ZSD_CNTY_ORGN - by user
+    cnty_orgn     TYPE c LENGTH 30,        " ZSD_CNTY_ORGN - by user
     cnty_dest     TYPE t005t-landx,
     " Sold-to / bill-to party (B20-B23)
     sp_kunnr      TYPE kunnr,
@@ -106,16 +106,16 @@ TYPES:
     " description and HSN pre-filled from the billing item
     sn            TYPE i,
     inv_sn        TYPE i,
-    article_no    TYPE string,
+    article_no    TYPE c LENGTH 20,
     std           TYPE i,
     articles      TYPE i,
     total_art     TYPE i,
-    part_no       TYPE string,
-    prod_desc     TYPE string,
+    part_no       TYPE c LENGTH 40,
+    prod_desc     TYPE c LENGTH 60,
     quantity      TYPE p LENGTH 13 DECIMALS 3,
     gross_wt      TYPE p LENGTH 13 DECIMALS 3,
     net_wt        TYPE p LENGTH 13 DECIMALS 3,
-    hsn           TYPE string,
+    hsn           TYPE c LENGTH 16,
     " Footer (B61) - by user
     declaration   TYPE string,
   END OF ty_out,
@@ -271,7 +271,6 @@ TYPES:
   BEGIN OF ty_label,
     name TYPE lvc_fname,
     text TYPE string,
-    len  TYPE lvc_outlen,              " column width in ALV / Excel
   END OF ty_label,
   ty_label_tab TYPE STANDARD TABLE OF ty_label WITH EMPTY KEY,
 
@@ -931,11 +930,13 @@ FORM display.
       cl_salv_table=>factory( IMPORTING r_salv_table = lo_alv
                               CHANGING  t_table      = gt_out ).
       lo_alv->get_functions( )->set_all( abap_true ).
+      " Optimal width for all columns (ALV and spreadsheet export)
+      lo_alv->get_columns( )->set_optimize( abap_true ).
       lo_alv->get_display_settings( )->set_striped_pattern( abap_true ).
       lo_alv->get_display_settings( )->set_list_header(
         'Export Packing List - fill the empty columns in Excel and upload the file to print' ).
       LOOP AT gt_labels INTO DATA(ls_label).
-        PERFORM column_text USING lo_alv ls_label-name ls_label-text ls_label-len.
+        PERFORM column_text USING lo_alv ls_label-name ls_label-text.
       ENDLOOP.
       lo_alv->display( ).
     CATCH cx_salv_error INTO lx_salv.
@@ -999,6 +1000,9 @@ FORM read_upload.
       IF ls_map-name = 'PACKNO'.
         lv_packno = abap_true.
       ENDIF.
+    ELSEIF lv_key IS NOT INITIAL.
+      APPEND VALUE #( type = 'W' ref = |Column { lv_col }|
+                      text = |Heading "{ lv_text }" not recognized - column ignored| ) TO gt_log.
     ENDIF.
   ENDDO.
 
@@ -1120,10 +1124,10 @@ FORM heading_map CHANGING ct_map TYPE ty_colmap_tab.
     APPEND lv_text TO lt_keys.
     APPEND ls_label-text TO lt_keys.
     IF strlen( ls_label-text ) > 20.
-      APPEND substring( val = ls_label-text len = 20 ) TO lt_keys.
+      APPEND substring( val = ls_label-text ) TO lt_keys.
     ENDIF.
     IF strlen( ls_label-text ) > 10.
-      APPEND substring( val = ls_label-text len = 10 ) TO lt_keys.
+      APPEND substring( val = ls_label-text ) TO lt_keys.
     ENDIF.
     LOOP AT lt_keys INTO lv_text.
       PERFORM normalize USING lv_text CHANGING lv_key.
@@ -1189,7 +1193,7 @@ FORM print_forms.
   " Packing lists in the order of the file
   LOOP AT gt_out INTO DATA(ls_out).
     IF NOT line_exists( lt_packno[ table_line = ls_out-packno ] ).
-      APPEND ls_out-packno TO lt_packno.
+      APPEND CONV string( ls_out-packno ) TO lt_packno.
     ENDIF.
   ENDLOOP.
 
@@ -1553,69 +1557,68 @@ ENDFORM.
 FORM labels.
 
   gt_labels = VALUE #(
-    ( name = 'SALES_ORDERS'   text = 'Sales Order' len = 12 )
-    ( name = 'INVOICES'       text = 'SAP Invoice Number' len = 12 )
-    ( name = 'EXPORTER'       text = 'Exporter Address' len = 60 )
-    ( name = 'GSTIN'          text = 'GST No.' len = 16 )
-    ( name = 'CIN'            text = 'CIN No.' len = 22 )
-    ( name = 'PACKNO'         text = 'Packing List No.' len = 12 )
-    ( name = 'PACKDT'         text = 'Packing List Date' len = 10 )
-    ( name = 'IEC'            text = 'Exporter Ref. (IEC No.)' len = 12 )
-    ( name = 'ORDER_NO'       text = 'Order No.' len = 20 )
-    ( name = 'ORDER_DATE'     text = 'Order Date' len = 10 )
-    ( name = 'BUYER_REF'      text = 'Buyer''s Reference No.' len = 25 )
-    ( name = 'BUYER_REF_DT'   text = 'Buyer''s Reference Date' len = 10 )
-    ( name = 'CNTY_ORGN'      text = 'Country of Origin of Goods' len = 15 )
-    ( name = 'CNTY_DEST'      text = 'Country of Final Destination' len = 15 )
-    ( name = 'SP_KUNNR'       text = 'Buyer (Sold-to)' len = 10 )
-    ( name = 'BUYER'          text = 'Buyer Address' len = 60 )
-    ( name = 'SP_EMAIL'       text = 'Buyer E-mail' len = 25 )
-    ( name = 'SP_TELEPHONE'   text = 'Buyer Telephone' len = 15 )
-    ( name = 'SP_MOBILE'      text = 'Buyer Mobile Number' len = 15 )
-    ( name = 'SH_KUNNR'       text = 'Ship-to Party' len = 10 )
-    ( name = 'SHIP_TO'        text = 'Ship-to Address' len = 60 )
-    ( name = 'SH_EMAIL'       text = 'Ship-to E-mail' len = 25 )
-    ( name = 'SH_TELEPHONE'   text = 'Ship-to Telephone' len = 15 )
-    ( name = 'SH_MOBILE'      text = 'Ship-to Mobile Number' len = 15 )
-    ( name = 'NP1'            text = 'Notifier Party 1' len = 30 )
-    ( name = 'NP2'            text = 'Notifier Party 2' len = 30 )
-    ( name = 'NP3'            text = 'Notifier Party 3' len = 30 )
-    ( name = 'NP4'            text = 'Notifier Party 4' len = 30 )
-    ( name = 'NP5'            text = 'Notifier Party 5' len = 30 )
-    ( name = 'PRE_CARRIAGE'   text = 'Pre-Carriage' len = 15 )
-    ( name = 'PLACE_RECEIPT'  text = 'Place of Receipt by Pre-carrier' len = 20 )
-    ( name = 'VESSEL_FLIGHT'  text = 'Vessel / Flight No.' len = 15 )
-    ( name = 'PORT_LOADING'   text = 'Port of Loading' len = 20 )
-    ( name = 'PORT_DISCH'     text = 'Port of Discharge' len = 20 )
-    ( name = 'PLACE_DELIV'    text = 'Place of Delivery' len = 20 )
-    ( name = 'MARKS_NOS'      text = 'Marks & Nos.' len = 15 )
-    ( name = 'CONTAINER_NO'   text = 'Container No.' len = 25 )
-    ( name = 'NO_PACKAGES'    text = 'No. of Packages' len = 12 )
-    ( name = 'GOODS_DESC'     text = 'Description of Goods' len = 40 )
-    ( name = 'ZTERM'          text = 'Payment Term' len = 6 )
-    ( name = 'PAYMENT_TERM'   text = 'Payment Term Desc.' len = 25 )
-    ( name = 'INCO1'          text = 'Incoterms' len = 6 )
-    ( name = 'INCO2'          text = 'Incoterms Location' len = 15 )
-    ( name = 'SN'             text = 'Sl.No.' len = 6 )
-    ( name = 'INV_SN'         text = 'Sr.No. INV' len = 6 )
-    ( name = 'ARTICLE_NO'     text = 'Article No.' len = 12 )
-    ( name = 'STD'            text = 'STD' len = 6 )
-    ( name = 'ARTICLES'       text = 'Articles' len = 8 )
-    ( name = 'TOTAL_ART'      text = 'Total Articles' len = 8 )
-    ( name = 'PART_NO'        text = 'Part No.' len = 18 )
-    ( name = 'PROD_DESC'      text = 'Product Description' len = 30 )
-    ( name = 'QUANTITY'       text = 'Quantity Pcs' len = 12 )
-    ( name = 'GROSS_WT'       text = 'Gross Wt. KGS' len = 12 )
-    ( name = 'NET_WT'         text = 'Net Wt. KGS' len = 12 )
-    ( name = 'HSN'            text = 'H.S Code' len = 10 )
-    ( name = 'DECLARATION'    text = 'Declaration' len = 40 ) ).
+    ( name = 'SALES_ORDERS'   text = 'Sales Order' )
+    ( name = 'INVOICES'       text = 'SAP Invoice Number' )
+    ( name = 'EXPORTER'       text = 'Exporter Address' )
+    ( name = 'GSTIN'          text = 'GST No.' )
+    ( name = 'CIN'            text = 'CIN No.' )
+    ( name = 'PACKNO'         text = 'Packing List No.' )
+    ( name = 'PACKDT'         text = 'Packing List Date' )
+    ( name = 'IEC'            text = 'Exporter Ref. (IEC No.)' )
+    ( name = 'ORDER_NO'       text = 'Order No.' )
+    ( name = 'ORDER_DATE'     text = 'Order Date' )
+    ( name = 'BUYER_REF'      text = 'Buyer''s Reference No.' )
+    ( name = 'BUYER_REF_DT'   text = 'Buyer''s Reference Date' )
+    ( name = 'CNTY_ORGN'      text = 'Country of Origin of Goods' )
+    ( name = 'CNTY_DEST'      text = 'Country of Final Destination' )
+    ( name = 'SP_KUNNR'       text = 'Buyer (Sold-to)' )
+    ( name = 'BUYER'          text = 'Buyer Address' )
+    ( name = 'SP_EMAIL'       text = 'Buyer E-mail' )
+    ( name = 'SP_TELEPHONE'   text = 'Buyer Telephone' )
+    ( name = 'SP_MOBILE'      text = 'Buyer Mobile Number' )
+    ( name = 'SH_KUNNR'       text = 'Ship-to Party' )
+    ( name = 'SHIP_TO'        text = 'Ship-to Address' )
+    ( name = 'SH_EMAIL'       text = 'Ship-to E-mail' )
+    ( name = 'SH_TELEPHONE'   text = 'Ship-to Telephone' )
+    ( name = 'SH_MOBILE'      text = 'Ship-to Mobile Number' )
+    ( name = 'NP1'            text = 'Notifier Party 1' )
+    ( name = 'NP2'            text = 'Notifier Party 2' )
+    ( name = 'NP3'            text = 'Notifier Party 3' )
+    ( name = 'NP4'            text = 'Notifier Party 4' )
+    ( name = 'NP5'            text = 'Notifier Party 5' )
+    ( name = 'PRE_CARRIAGE'   text = 'Pre-Carriage' )
+    ( name = 'PLACE_RECEIPT'  text = 'Place of Receipt by Pre-carrier' )
+    ( name = 'VESSEL_FLIGHT'  text = 'Vessel / Flight No.' )
+    ( name = 'PORT_LOADING'   text = 'Port of Loading' )
+    ( name = 'PORT_DISCH'     text = 'Port of Discharge' )
+    ( name = 'PLACE_DELIV'    text = 'Place of Delivery' )
+    ( name = 'MARKS_NOS'      text = 'Marks & Nos.' )
+    ( name = 'CONTAINER_NO'   text = 'Container No.' )
+    ( name = 'NO_PACKAGES'    text = 'No. of Packages' )
+    ( name = 'GOODS_DESC'     text = 'Description of Goods' )
+    ( name = 'ZTERM'          text = 'Payment Term' )
+    ( name = 'PAYMENT_TERM'   text = 'Payment Term Desc.' )
+    ( name = 'INCO1'          text = 'Incoterms' )
+    ( name = 'INCO2'          text = 'Incoterms Location' )
+    ( name = 'SN'             text = 'Sl.No.' )
+    ( name = 'INV_SN'         text = 'Sr.No. INV' )
+    ( name = 'ARTICLE_NO'     text = 'Article No.' )
+    ( name = 'STD'            text = 'STD' )
+    ( name = 'ARTICLES'       text = 'Articles' )
+    ( name = 'TOTAL_ART'      text = 'Total Articles' )
+    ( name = 'PART_NO'        text = 'Part No.' )
+    ( name = 'PROD_DESC'      text = 'Product Description' )
+    ( name = 'QUANTITY'       text = 'Quantity Pcs' )
+    ( name = 'GROSS_WT'       text = 'Gross Wt. KGS' )
+    ( name = 'NET_WT'         text = 'Net Wt. KGS' )
+    ( name = 'HSN'            text = 'H.S Code' )
+    ( name = 'DECLARATION'    text = 'Declaration' ) ).
 
 ENDFORM.
 
 FORM column_text USING io_alv  TYPE REF TO cl_salv_table
                        iv_name TYPE csequence
-                       iv_text TYPE csequence
-                       iv_len  TYPE lvc_outlen.
+                       iv_text TYPE csequence.
 
   DATA lo_column TYPE REF TO cl_salv_column.
   DATA lv_name   TYPE lvc_fname.
@@ -1632,8 +1635,6 @@ FORM column_text USING io_alv  TYPE REF TO cl_salv_table
       lo_column->set_long_text( lv_long ).
       lo_column->set_medium_text( lv_medium ).
       lo_column->set_short_text( lv_short ).
-      " Fixed width: visible also when empty, reasonable in the Excel export
-      lo_column->set_output_length( iv_len ).
     CATCH cx_salv_not_found.
       RETURN.
   ENDTRY.
@@ -1647,9 +1648,6 @@ FORM show_log.
 
   DATA lo_log     TYPE REF TO cl_salv_table.
   DATA lx_salv    TYPE REF TO cx_salv_error.
-  DATA lv_len_4   TYPE lvc_outlen VALUE 4.
-  DATA lv_len_20  TYPE lvc_outlen VALUE 20.
-  DATA lv_len_100 TYPE lvc_outlen VALUE 100.
 
   IF gt_log IS INITIAL.
     RETURN.
@@ -1660,9 +1658,10 @@ FORM show_log.
                               CHANGING  t_table      = gt_log ).
       lo_log->set_screen_popup( start_column = 5  end_column = 150
                                 start_line   = 3  end_line   = 20 ).
-      PERFORM column_text USING lo_log 'TYPE' 'Type'      lv_len_4.
-      PERFORM column_text USING lo_log 'REF'  'Reference' lv_len_20.
-      PERFORM column_text USING lo_log 'TEXT' 'Message'   lv_len_100.
+      lo_log->get_columns( )->set_optimize( abap_true ).
+      PERFORM column_text USING lo_log 'TYPE' 'Type'.
+      PERFORM column_text USING lo_log 'REF'  'Reference'.
+      PERFORM column_text USING lo_log 'TEXT' 'Message'.
       lo_log->display( ).
     CATCH cx_salv_error INTO lx_salv.
       MESSAGE lx_salv TYPE 'S' DISPLAY LIKE 'E'.
