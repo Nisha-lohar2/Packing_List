@@ -49,9 +49,9 @@ TYPES:
     " Reference
     sales_orders  TYPE string,             " sales order of the row
     invoices      TYPE string,             " billing document of the row
-    " Header - Exporter (B3-B5): name, street, street 2, city - postal
-    " code, region text, country text in ONE column, comma separated
-    exporter      TYPE string,
+    " Header - Exporter (B3-B5), ONE column, fixed positions (A17):
+    " name, street, street 2, city, postal code, region text, country text
+    exporter      TYPE c LENGTH 100,
     gstin         TYPE j_1bbranch-gstin,
     cin           TYPE t001z-paval,
     " Header (B9-B17)
@@ -66,17 +66,17 @@ TYPES:
     cnty_dest     TYPE t005t-landx,
     " Sold-to / bill-to party (B20-B23)
     sp_kunnr      TYPE kunnr,
-    " Name, street, street 2, district, postal code city, country text
-    " in ONE column, comma separated
-    buyer         TYPE string,
+    " ONE column, fixed positions (A19): name, street, street 2, city,
+    " district, postal code, country text
+    buyer         TYPE c LENGTH 100,
     sp_email      TYPE adr6-smtp_addr,
     sp_telephone  TYPE adr2-telnr_long,
     sp_mobile     TYPE adr2-telnr_long,
     " Ship-to party (B26-B29)
     sh_kunnr      TYPE kunnr,
-    " Name, street, street 2, district, postal code city, country text
-    " in ONE column, comma separated
-    ship_to       TYPE string,
+    " ONE column, fixed positions (A19): name, street, street 2, city,
+    " district, postal code, country text
+    ship_to       TYPE c LENGTH 100,
     sh_email      TYPE adr6-smtp_addr,
     sh_telephone  TYPE adr2-telnr_long,
     sh_mobile     TYPE adr2-telnr_long,
@@ -718,15 +718,15 @@ FORM invoice_header USING    is_bill  TYPE ty_bill
     IF sy-subrc = 0.
       lv_cty = ls_t005t-landx.                                       " B5
     ENDIF.
-    " B3: NAME1, STREET, STR_SUPPL1, CITY1 - POST_CODE1, region, country
+    " B3-B5: NAME1, STREET, STR_SUPPL1, CITY1, POST_CODE1, region, country
     lt_parts = VALUE #( ( CONV string( ls_adrc-name1 ) )
                         ( CONV string( ls_adrc-street ) )
                         ( CONV string( ls_adrc-str_suppl1 ) )
-                        ( condense( |{ ls_adrc-city1 } { COND string( WHEN ls_adrc-post_code1 IS NOT INITIAL
-                                                                        THEN |- { ls_adrc-post_code1 }| ) }| ) )
+                        ( CONV string( ls_adrc-city1 ) )
+                        ( CONV string( ls_adrc-post_code1 ) )
                         ( lv_reg )
                         ( lv_cty ) ).
-    PERFORM join USING lt_parts `, ` CHANGING cs_out-exporter.
+    PERFORM fixed_address USING lt_parts lv_ref 'Exporter address' CHANGING cs_out-exporter.
   ELSE.
     APPEND VALUE #( type = 'W' ref = lv_ref
                     text = |Company code { is_bill-bukrs }: no address (T001 / ADRC)| ) TO gt_log.
@@ -759,14 +759,15 @@ FORM invoice_header USING    is_bill  TYPE ty_bill
     IF sy-subrc = 0.
       lv_cty = ls_t005t-landx.
     ENDIF.
-    " B20: NAME1, STREET, STR_SUPPL1, CITY2, POST_CODE1 CITY1, country text
+    " B20: NAME1, STREET, STR_SUPPL1, CITY1, CITY2, POST_CODE1, country text
     lt_parts = VALUE #( ( CONV string( ls_adrc-name1 ) )
                         ( CONV string( ls_adrc-street ) )
                         ( CONV string( ls_adrc-str_suppl1 ) )
+                        ( CONV string( ls_adrc-city1 ) )
                         ( CONV string( ls_adrc-city2 ) )
-                        ( condense( |{ ls_adrc-post_code1 } { ls_adrc-city1 }| ) )
+                        ( CONV string( ls_adrc-post_code1 ) )
                         ( lv_cty ) ).
-    PERFORM join USING lt_parts `, ` CHANGING cs_out-buyer.
+    PERFORM fixed_address USING lt_parts lv_ref 'Buyer address' CHANGING cs_out-buyer.
   ENDIF.
   PERFORM contact USING ls_party-adrnr
                   CHANGING cs_out-sp_email cs_out-sp_telephone cs_out-sp_mobile.
@@ -782,14 +783,15 @@ FORM invoice_header USING    is_bill  TYPE ty_bill
       lv_cty           = ls_t005t-landx.
       cs_out-cnty_dest = ls_t005t-landx.                            " B17
     ENDIF.
-    " B26: NAME1, STREET, STR_SUPPL1, CITY2, POST_CODE1 CITY1, country text
+    " B26: NAME1, STREET, STR_SUPPL1, CITY1, CITY2, POST_CODE1, country text
     lt_parts = VALUE #( ( CONV string( ls_adrc-name1 ) )
                         ( CONV string( ls_adrc-street ) )
                         ( CONV string( ls_adrc-str_suppl1 ) )
+                        ( CONV string( ls_adrc-city1 ) )
                         ( CONV string( ls_adrc-city2 ) )
-                        ( condense( |{ ls_adrc-post_code1 } { ls_adrc-city1 }| ) )
+                        ( CONV string( ls_adrc-post_code1 ) )
                         ( lv_cty ) ).
-    PERFORM join USING lt_parts `, ` CHANGING cs_out-ship_to.
+    PERFORM fixed_address USING lt_parts lv_ref 'Ship-to address' CHANGING cs_out-ship_to.
   ENDIF.
   PERFORM contact USING ls_party-adrnr
                   CHANGING cs_out-sh_email cs_out-sh_telephone cs_out-sh_mobile.
@@ -1226,6 +1228,7 @@ FORM form_header USING    it_rows TYPE ty_out_tab
 
   DATA ls_h      TYPE ty_out.
   DATA lt_parts  TYPE ty_string_tab.
+  DATA lt_addr   TYPE ty_string_tab.
   DATA lt_np     TYPE ty_string_tab.
   DATA lv_text   TYPE string.
   DATA lv_nl     TYPE string.
@@ -1273,12 +1276,15 @@ FORM form_header USING    it_rows TYPE ty_out_tab
   cs_hdr-np_count = lines( lt_np ).
   cs_hdr-format   = COND #( WHEN cs_hdr-np_count > 0 THEN 'N' ELSE 'O' ).
 
-  " Exporter: "Name, street, ..., country" -> name + address lines
-  SPLIT ls_h-exporter AT `,` INTO TABLE lt_parts.
-  READ TABLE lt_parts INTO lv_text INDEX 1.
-  cs_hdr-exp_name = condense( lv_text ).
-  cs_hdr-sign_for = cs_hdr-exp_name.
-  DELETE lt_parts INDEX 1.
+  " Exporter: fixed positions 1 name, 2 street, 3 street 2, 4 city,
+  " 5 postal code, 6 region, 7 country -> name + address lines
+  PERFORM split_address USING ls_h-exporter CHANGING lt_addr.
+  cs_hdr-exp_name = lt_addr[ 1 ].
+  cs_hdr-sign_for = lt_addr[ 1 ].
+  lt_parts = VALUE #( ( lt_addr[ 2 ] ) ( lt_addr[ 3 ] )
+                      ( condense( |{ lt_addr[ 4 ] } { COND string( WHEN lt_addr[ 5 ] IS NOT INITIAL
+                                                                     THEN |- { lt_addr[ 5 ] }| ) }| ) )
+                      ( lt_addr[ 6 ] ) ( lt_addr[ 7 ] ) ).
   PERFORM join USING lt_parts lv_nl CHANGING cs_hdr-exp_address.
   cs_hdr-exp_gstin = ls_h-gstin.
   cs_hdr-exp_iec   = ls_h-iec.
@@ -1286,20 +1292,21 @@ FORM form_header USING    it_rows TYPE ty_out_tab
 
   " Consignee = ship-to, buyer = sold-to
   cs_hdr-same_party = xsdbool( ls_h-sp_kunnr = ls_h-sh_kunnr AND ls_h-sh_kunnr IS NOT INITIAL ).
-  " Consignee: "Name, street, ..., country" -> name + address
-  SPLIT ls_h-ship_to AT `,` INTO TABLE lt_parts.
-  READ TABLE lt_parts INTO lv_text INDEX 1.
-  cs_hdr-cns_name = condense( lv_text ).
-  DELETE lt_parts INDEX 1.
+  " Consignee: fixed positions 1 name, 2 street, 3 street 2, 4 city,
+  " 5 district, 6 postal code, 7 country
+  PERFORM split_address USING ls_h-ship_to CHANGING lt_addr.
+  cs_hdr-cns_name = lt_addr[ 1 ].
+  lt_parts = VALUE #( ( lt_addr[ 2 ] ) ( lt_addr[ 3 ] ) ( lt_addr[ 5 ] )
+                      ( condense( |{ lt_addr[ 6 ] } { lt_addr[ 4 ] }| ) ) ( lt_addr[ 7 ] ) ).
   PERFORM join USING lt_parts `, ` CHANGING cs_hdr-cns_address.
   cs_hdr-cns_tel    = ls_h-sh_telephone.
   cs_hdr-cns_mobile = ls_h-sh_mobile.
   cs_hdr-cns_email  = ls_h-sh_email.
-  " Buyer: "Name, street, ..., country" -> name + address
-  SPLIT ls_h-buyer AT `,` INTO TABLE lt_parts.
-  READ TABLE lt_parts INTO lv_text INDEX 1.
-  cs_hdr-buy_name = condense( lv_text ).
-  DELETE lt_parts INDEX 1.
+  " Buyer: same fixed positions as the consignee
+  PERFORM split_address USING ls_h-buyer CHANGING lt_addr.
+  cs_hdr-buy_name = lt_addr[ 1 ].
+  lt_parts = VALUE #( ( lt_addr[ 2 ] ) ( lt_addr[ 3 ] ) ( lt_addr[ 5 ] )
+                      ( condense( |{ lt_addr[ 6 ] } { lt_addr[ 4 ] }| ) ) ( lt_addr[ 7 ] ) ).
   PERFORM join USING lt_parts `, ` CHANGING cs_hdr-buy_address.
   cs_hdr-buy_tel    = ls_h-sp_telephone.
   cs_hdr-buy_mobile = ls_h-sp_mobile.
@@ -1548,7 +1555,7 @@ FORM labels.
   gt_labels = VALUE #(
     ( name = 'SALES_ORDERS'   text = 'Sales Order' len = 12 )
     ( name = 'INVOICES'       text = 'SAP Invoice Number' len = 12 )
-    ( name = 'EXPORTER'       text = 'Exporter Address' len = 50 )
+    ( name = 'EXPORTER'       text = 'Exporter Address' len = 60 )
     ( name = 'GSTIN'          text = 'GST No.' len = 16 )
     ( name = 'CIN'            text = 'CIN No.' len = 22 )
     ( name = 'PACKNO'         text = 'Packing List No.' len = 12 )
@@ -1561,12 +1568,12 @@ FORM labels.
     ( name = 'CNTY_ORGN'      text = 'Country of Origin of Goods' len = 15 )
     ( name = 'CNTY_DEST'      text = 'Country of Final Destination' len = 15 )
     ( name = 'SP_KUNNR'       text = 'Buyer (Sold-to)' len = 10 )
-    ( name = 'BUYER'          text = 'Buyer Address' len = 50 )
+    ( name = 'BUYER'          text = 'Buyer Address' len = 60 )
     ( name = 'SP_EMAIL'       text = 'Buyer E-mail' len = 25 )
     ( name = 'SP_TELEPHONE'   text = 'Buyer Telephone' len = 15 )
     ( name = 'SP_MOBILE'      text = 'Buyer Mobile Number' len = 15 )
     ( name = 'SH_KUNNR'       text = 'Ship-to Party' len = 10 )
-    ( name = 'SHIP_TO'        text = 'Ship-to Address' len = 50 )
+    ( name = 'SHIP_TO'        text = 'Ship-to Address' len = 60 )
     ( name = 'SH_EMAIL'       text = 'Ship-to E-mail' len = 25 )
     ( name = 'SH_TELEPHONE'   text = 'Ship-to Telephone' len = 15 )
     ( name = 'SH_MOBILE'      text = 'Ship-to Mobile Number' len = 15 )
@@ -1786,6 +1793,55 @@ FORM hsn_text USING    iv_hsn  TYPE string
   ELSE.
     cv_text = iv_hsn.
   ENDIF.
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Address parts -> one CHAR100 column with FIXED positions: every part
+*& keeps its place, an empty part stays empty between the commas
+*& ("NAME, STREET, , CITY, , 380059, INDIA"), so the column can be split
+*& back into the right fields. A comma inside a part is replaced by a
+*& space (it would shift the positions).
+*&---------------------------------------------------------------------*
+FORM fixed_address USING    it_parts TYPE ty_string_tab
+                            iv_ref   TYPE string
+                            iv_what  TYPE csequence
+                   CHANGING cv_addr  TYPE c.
+
+  DATA lt_clean TYPE ty_string_tab.
+  DATA lv_text  TYPE string.
+
+  LOOP AT it_parts INTO lv_text.
+    REPLACE ALL OCCURRENCES OF `,` IN lv_text WITH ` `.
+    CONDENSE lv_text.
+    APPEND lv_text TO lt_clean.
+  ENDLOOP.
+  lv_text = concat_lines_of( table = lt_clean sep = `, ` ).
+  cv_addr = lv_text.
+  IF strlen( lv_text ) > 100.
+    APPEND VALUE #( type = 'W' ref = iv_ref
+                    text = |{ iv_what } longer than 100 characters - cut off: { lv_text }| ) TO gt_log.
+  ENDIF.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Fixed-position address column -> its 7 parts (empty parts kept)
+*&---------------------------------------------------------------------*
+FORM split_address USING    iv_addr  TYPE c
+                   CHANGING ct_parts TYPE ty_string_tab.
+
+  DATA lv_text TYPE string.
+
+  CLEAR ct_parts.
+  lv_text = iv_addr.
+  SPLIT lv_text AT `,` INTO TABLE ct_parts.
+  LOOP AT ct_parts ASSIGNING FIELD-SYMBOL(<lv_part>).
+    CONDENSE <lv_part>.
+  ENDLOOP.
+  WHILE lines( ct_parts ) < 7.
+    APPEND INITIAL LINE TO ct_parts.
+  ENDWHILE.
+
 ENDFORM.
 
 FORM join USING    it_parts TYPE ty_string_tab

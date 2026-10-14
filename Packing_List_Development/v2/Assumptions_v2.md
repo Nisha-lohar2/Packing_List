@@ -26,7 +26,7 @@ one of them must be filled. File filled → step 4, otherwise step 1.
 | Link | Implemented as | Logic |
 |---|---|---|
 | Sales order → billing documents | `VBRP-AUBEL IN S_VBELN`, joined to `VBRK` | B13 uses AUBEL |
-| Exporter | `VBRK-BUKRS` → `T001-ADRNR` → `ADRC`; **one column "Exporter Address"**: name, street, street 2, city - postal code, region text, country text, separated by commas | B3 – B5 |
+| Exporter | `VBRK-BUKRS` → `T001-ADRNR` → `ADRC`; **one column "Exporter Address"** (CHAR 100, fixed positions, A17) | B3 – B5 |
 | GST No. | `J_1BBRANCH-GSTIN` for `BUKRS` + `BRANCH` = `VBRK-BUPLA` | B6 |
 | CIN | `T001Z-PAVAL`, `PARTY` = `ZCIN` | B7 |
 | IEC | `ADRC-BUILDING` of the company address | B11 |
@@ -58,9 +58,9 @@ one of them must be filled. File filled → step 4, otherwise step 1.
 | A14 | Form totals: quantity, gross and net weight = sums of the packing list rows. | Totals row of the sample PDFs |
 | A15 | Form rows: an HSN heading row whenever the HSN changes; an empty Articles / weight cell belongs to the package above (merged cell on the samples). | Sample PDFs |
 | A16 | Form output: print preview on device `LP01` (constant `GC_DEST`). | Decision of 12.10. |
-| A17 | Exporter address in one column, comma separated. On the form the part before the first comma is the exporter name, the rest are the address lines. | User request 14.10. |
-| A19 | Buyer (sold-to) address in one column "Buyer Address": name, street, street 2, district, postal code city, country text, comma separated. Customer no., e-mail, telephone and mobile stay separate columns. On the form the part before the first comma is the buyer name. | User request 14.10. |
-| A20 | Ship-to (consignee) address in one column "Ship-to Address", same format as A19. Customer no., e-mail, telephone and mobile stay separate. On the form the part before the first comma is the consignee name. | User request 14.10. |
+| A17 | Exporter address in ONE column `CHAR 100` with **fixed positions**, separated by ", ": 1 name, 2 street, 3 street 2, 4 city, 5 postal code, 6 region text, 7 country text. A missing part stays empty between the commas (e.g. `ASTRAL LIMITED., 207/1 ASTRAL HOUSE, , AHMEDABAD, , GUJARAT, INDIA`) so the column can be split back into the right fields. A comma inside a part is replaced by a space. Longer than 100 characters → cut off, warning in the log. | User request 14.10. |
+| A19 | Buyer (sold-to) address in ONE column `CHAR 100`, fixed positions as A17: 1 name, 2 street, 3 street 2, 4 city, 5 district, 6 postal code, 7 country text (logic B20 order). Customer no., e-mail, telephone and mobile stay separate. | User request 14.10. |
+| A20 | Ship-to address in ONE column `CHAR 100`, same fixed positions as A19 (logic B26). | User request 14.10. |
 | A18 | Every ALV column has a fixed width (6 – 50 characters, by content) so the Excel export has reasonable column sizes and empty columns stay visible. | User request 14.10. |
 
 ## 4. Error handling
