@@ -74,14 +74,9 @@ TYPES:
     sp_mobile     TYPE adr2-telnr_long,
     " Ship-to party (B26-B29)
     sh_kunnr      TYPE kunnr,
-    sh_name1      TYPE adrc-name1,
-    sh_street     TYPE adrc-street,
-    sh_str_supl1  TYPE adrc-str_suppl1,
-    sh_city1      TYPE adrc-city1,
-    sh_city2      TYPE adrc-city2,
-    sh_post_code  TYPE adrc-post_code1,
-    sh_country    TYPE land1,
-    sh_country_tx TYPE t005t-landx,
+    " Name, street, street 2, district, postal code city, country text
+    " in ONE column, comma separated
+    ship_to       TYPE string,
     sh_email      TYPE adr6-smtp_addr,
     sh_telephone  TYPE adr2-telnr_long,
     sh_mobile     TYPE adr2-telnr_long,
@@ -781,18 +776,20 @@ FORM invoice_header USING    is_bill  TYPE ty_bill
   cs_out-sh_kunnr = ls_party-kunnr.
   READ TABLE gt_adrc INTO ls_adrc WITH TABLE KEY addrnumber = ls_party-adrnr.
   IF sy-subrc = 0.
-    cs_out-sh_name1     = ls_adrc-name1.
-    cs_out-sh_street    = ls_adrc-street.
-    cs_out-sh_str_supl1 = ls_adrc-str_suppl1.
-    cs_out-sh_city1     = ls_adrc-city1.
-    cs_out-sh_city2     = ls_adrc-city2.
-    cs_out-sh_post_code = ls_adrc-post_code1.
-    cs_out-sh_country   = ls_adrc-country.
+    CLEAR lv_cty.
     READ TABLE gt_t005t INTO ls_t005t WITH TABLE KEY land1 = ls_adrc-country.
     IF sy-subrc = 0.
-      cs_out-sh_country_tx = ls_t005t-landx.
-      cs_out-cnty_dest     = ls_t005t-landx.                        " B17
+      lv_cty           = ls_t005t-landx.
+      cs_out-cnty_dest = ls_t005t-landx.                            " B17
     ENDIF.
+    " B26: NAME1, STREET, STR_SUPPL1, CITY2, POST_CODE1 CITY1, country text
+    lt_parts = VALUE #( ( CONV string( ls_adrc-name1 ) )
+                        ( CONV string( ls_adrc-street ) )
+                        ( CONV string( ls_adrc-str_suppl1 ) )
+                        ( CONV string( ls_adrc-city2 ) )
+                        ( condense( |{ ls_adrc-post_code1 } { ls_adrc-city1 }| ) )
+                        ( lv_cty ) ).
+    PERFORM join USING lt_parts `, ` CHANGING cs_out-ship_to.
   ENDIF.
   PERFORM contact USING ls_party-adrnr
                   CHANGING cs_out-sh_email cs_out-sh_telephone cs_out-sh_mobile.
@@ -1289,11 +1286,11 @@ FORM form_header USING    it_rows TYPE ty_out_tab
 
   " Consignee = ship-to, buyer = sold-to
   cs_hdr-same_party = xsdbool( ls_h-sp_kunnr = ls_h-sh_kunnr AND ls_h-sh_kunnr IS NOT INITIAL ).
-  cs_hdr-cns_name   = ls_h-sh_name1.
-  lt_parts = VALUE #( ( CONV string( ls_h-sh_street ) ) ( CONV string( ls_h-sh_str_supl1 ) )
-                      ( CONV string( ls_h-sh_city2 ) )
-                      ( condense( |{ ls_h-sh_post_code } { ls_h-sh_city1 }| ) )
-                      ( CONV string( ls_h-sh_country_tx ) ) ).
+  " Consignee: "Name, street, ..., country" -> name + address
+  SPLIT ls_h-ship_to AT `,` INTO TABLE lt_parts.
+  READ TABLE lt_parts INTO lv_text INDEX 1.
+  cs_hdr-cns_name = condense( lv_text ).
+  DELETE lt_parts INDEX 1.
   PERFORM join USING lt_parts `, ` CHANGING cs_hdr-cns_address.
   cs_hdr-cns_tel    = ls_h-sh_telephone.
   cs_hdr-cns_mobile = ls_h-sh_mobile.
@@ -1569,14 +1566,7 @@ FORM labels.
     ( name = 'SP_TELEPHONE'   text = 'Buyer Telephone' len = 15 )
     ( name = 'SP_MOBILE'      text = 'Buyer Mobile Number' len = 15 )
     ( name = 'SH_KUNNR'       text = 'Ship-to Party' len = 10 )
-    ( name = 'SH_NAME1'       text = 'Ship-to Name' len = 25 )
-    ( name = 'SH_STREET'      text = 'Ship-to Street' len = 25 )
-    ( name = 'SH_STR_SUPL1'   text = 'Ship-to Street 2' len = 20 )
-    ( name = 'SH_CITY1'       text = 'Ship-to City' len = 15 )
-    ( name = 'SH_CITY2'       text = 'Ship-to District' len = 15 )
-    ( name = 'SH_POST_CODE'   text = 'Ship-to Postal Code' len = 10 )
-    ( name = 'SH_COUNTRY'     text = 'Ship-to Country' len = 6 )
-    ( name = 'SH_COUNTRY_TX'  text = 'Ship-to Country Desc.' len = 15 )
+    ( name = 'SHIP_TO'        text = 'Ship-to Address' len = 50 )
     ( name = 'SH_EMAIL'       text = 'Ship-to E-mail' len = 25 )
     ( name = 'SH_TELEPHONE'   text = 'Ship-to Telephone' len = 15 )
     ( name = 'SH_MOBILE'      text = 'Ship-to Mobile Number' len = 15 )

@@ -60,6 +60,7 @@ one of them must be filled. File filled → step 4, otherwise step 1.
 | A16 | Form output: print preview on device `LP01` (constant `GC_DEST`). | Decision of 12.10. |
 | A17 | Exporter address in one column, comma separated. On the form the part before the first comma is the exporter name, the rest are the address lines. | User request 14.10. |
 | A19 | Buyer (sold-to) address in one column "Buyer Address": name, street, street 2, district, postal code city, country text, comma separated. Customer no., e-mail, telephone and mobile stay separate columns. On the form the part before the first comma is the buyer name. | User request 14.10. |
+| A20 | Ship-to (consignee) address in one column "Ship-to Address", same format as A19. Customer no., e-mail, telephone and mobile stay separate. On the form the part before the first comma is the consignee name. | User request 14.10. |
 | A18 | Every ALV column has a fixed width (6 – 50 characters, by content) so the Excel export has reasonable column sizes and empty columns stay visible. | User request 14.10. |
 
 ## 4. Error handling
