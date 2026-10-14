@@ -930,13 +930,13 @@ FORM display.
       cl_salv_table=>factory( IMPORTING r_salv_table = lo_alv
                               CHANGING  t_table      = gt_out ).
       lo_alv->get_functions( )->set_all( abap_true ).
-      " Optimal width for all columns (ALV and spreadsheet export)
-      lo_alv->get_columns( )->set_optimize( abap_true ).
       lo_alv->get_display_settings( )->set_striped_pattern( abap_true ).
       lo_alv->get_display_settings( )->set_list_header(
         'Export Packing List - fill the empty columns in Excel and upload the file to print' ).
+      " Full heading + width = longer of heading and content (A18)
       LOOP AT gt_labels INTO DATA(ls_label).
-        PERFORM column_text USING lo_alv ls_label-name ls_label-text.
+        PERFORM column_text  USING lo_alv ls_label-name ls_label-text.
+        PERFORM column_width USING lo_alv ls_label-name ls_label-text.
       ENDLOOP.
       lo_alv->display( ).
     CATCH cx_salv_error INTO lx_salv.
@@ -1635,6 +1635,56 @@ FORM column_text USING io_alv  TYPE REF TO cl_salv_table
       lo_column->set_long_text( lv_long ).
       lo_column->set_medium_text( lv_medium ).
       lo_column->set_short_text( lv_short ).
+      " Always show the complete (long) heading - also in the export
+      lo_column->set_fixed_header_text( 'L' ).
+    CATCH cx_salv_not_found.
+      RETURN.
+  ENDTRY.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Column width = the longer of the heading and the longest value
+*& (values counted up to 60 characters, the heading always complete)
+*&---------------------------------------------------------------------*
+FORM column_width USING io_alv  TYPE REF TO cl_salv_table
+                        iv_name TYPE csequence
+                        iv_text TYPE csequence.
+
+  CONSTANTS lc_max TYPE i VALUE 60.
+
+  DATA lo_column TYPE REF TO cl_salv_column.
+  DATA lv_name   TYPE lvc_fname.
+  DATA lv_kind   TYPE c LENGTH 1.
+  DATA lv_value  TYPE string.
+  DATA lv_len    TYPE i.
+  DATA lv_width  TYPE i.
+  DATA lv_outlen TYPE lvc_outlen.
+
+  FIELD-SYMBOLS <lv_field> TYPE any.
+
+  lv_width = strlen( iv_text ).
+
+  LOOP AT gt_out ASSIGNING FIELD-SYMBOL(<ls_out>).
+    ASSIGN COMPONENT iv_name OF STRUCTURE <ls_out> TO <lv_field>.
+    IF sy-subrc <> 0.
+      EXIT.
+    ENDIF.
+    DESCRIBE FIELD <lv_field> TYPE lv_kind.
+    IF lv_kind = 'D'.
+      lv_len = 10.                                      " DD.MM.YYYY
+    ELSE.
+      lv_value = condense( |{ <lv_field> }| ).
+      lv_len   = nmin( val1 = strlen( lv_value ) val2 = lc_max ).
+    ENDIF.
+    lv_width = nmax( val1 = lv_width val2 = lv_len ).
+  ENDLOOP.
+
+  TRY.
+      lv_name   = iv_name.
+      lo_column = io_alv->get_columns( )->get_column( lv_name ).
+      lv_outlen = lv_width + 1.
+      lo_column->set_output_length( lv_outlen ).
     CATCH cx_salv_not_found.
       RETURN.
   ENDTRY.

@@ -61,7 +61,7 @@ one of them must be filled. File filled → step 4, otherwise step 1.
 | A17 | Exporter address in ONE column `CHAR 100` with **fixed positions**, separated by ", ": 1 name, 2 street, 3 street 2, 4 city, 5 postal code, 6 region text, 7 country text. A missing part stays empty between the commas (e.g. `ASTRAL LIMITED., 207/1 ASTRAL HOUSE, , AHMEDABAD, , GUJARAT, INDIA`) so the column can be split back into the right fields. A comma inside a part is replaced by a space. Longer than 100 characters → cut off, warning in the log. | User request 14.10. |
 | A19 | Buyer (sold-to) address in ONE column `CHAR 100`, fixed positions as A17: 1 name, 2 street, 3 street 2, 4 city, 5 district, 6 postal code, 7 country text (logic B20 order). Customer no., e-mail, telephone and mobile stay separate. | User request 14.10. |
 | A20 | Ship-to address in ONE column `CHAR 100`, same fixed positions as A19 (logic B26). | User request 14.10. |
-| A18 | All ALV columns use **optimal width** (ALV and spreadsheet export). Short text columns are typed with fitting lengths (e.g. sales order / invoice / packing list no. CHAR 10) so the width follows the content. Upload: a heading that is not recognized is reported in the log. | User request 14.10. |
+| A18 | Column headings are always shown complete (long text fixed). Each column's width = the longer of its heading and its longest value (values counted up to 60 characters); applies to the ALV and the spreadsheet export. Short text columns are typed with fitting lengths. Upload: a heading that is not recognized is reported in the log. | User request 14.10. |
 
 ## 4. Error handling
 
