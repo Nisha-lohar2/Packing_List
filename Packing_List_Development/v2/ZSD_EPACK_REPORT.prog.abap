@@ -66,14 +66,9 @@ TYPES:
     cnty_dest     TYPE t005t-landx,
     " Sold-to / bill-to party (B20-B23)
     sp_kunnr      TYPE kunnr,
-    sp_name1      TYPE adrc-name1,
-    sp_street     TYPE adrc-street,
-    sp_str_supl1  TYPE adrc-str_suppl1,
-    sp_city1      TYPE adrc-city1,
-    sp_city2      TYPE adrc-city2,
-    sp_post_code  TYPE adrc-post_code1,
-    sp_country    TYPE land1,
-    sp_country_tx TYPE t005t-landx,
+    " Name, street, street 2, district, postal code city, country text
+    " in ONE column, comma separated
+    buyer         TYPE string,
     sp_email      TYPE adr6-smtp_addr,
     sp_telephone  TYPE adr2-telnr_long,
     sp_mobile     TYPE adr2-telnr_long,
@@ -764,17 +759,19 @@ FORM invoice_header USING    is_bill  TYPE ty_bill
   cs_out-sp_kunnr = ls_party-kunnr.
   READ TABLE gt_adrc INTO ls_adrc WITH TABLE KEY addrnumber = ls_party-adrnr.
   IF sy-subrc = 0.
-    cs_out-sp_name1     = ls_adrc-name1.
-    cs_out-sp_street    = ls_adrc-street.
-    cs_out-sp_str_supl1 = ls_adrc-str_suppl1.
-    cs_out-sp_city1     = ls_adrc-city1.
-    cs_out-sp_city2     = ls_adrc-city2.
-    cs_out-sp_post_code = ls_adrc-post_code1.
-    cs_out-sp_country   = ls_adrc-country.
+    CLEAR lv_cty.
     READ TABLE gt_t005t INTO ls_t005t WITH TABLE KEY land1 = ls_adrc-country.
     IF sy-subrc = 0.
-      cs_out-sp_country_tx = ls_t005t-landx.
+      lv_cty = ls_t005t-landx.
     ENDIF.
+    " B20: NAME1, STREET, STR_SUPPL1, CITY2, POST_CODE1 CITY1, country text
+    lt_parts = VALUE #( ( CONV string( ls_adrc-name1 ) )
+                        ( CONV string( ls_adrc-street ) )
+                        ( CONV string( ls_adrc-str_suppl1 ) )
+                        ( CONV string( ls_adrc-city2 ) )
+                        ( condense( |{ ls_adrc-post_code1 } { ls_adrc-city1 }| ) )
+                        ( lv_cty ) ).
+    PERFORM join USING lt_parts `, ` CHANGING cs_out-buyer.
   ENDIF.
   PERFORM contact USING ls_party-adrnr
                   CHANGING cs_out-sp_email cs_out-sp_telephone cs_out-sp_mobile.
@@ -1301,11 +1298,11 @@ FORM form_header USING    it_rows TYPE ty_out_tab
   cs_hdr-cns_tel    = ls_h-sh_telephone.
   cs_hdr-cns_mobile = ls_h-sh_mobile.
   cs_hdr-cns_email  = ls_h-sh_email.
-  cs_hdr-buy_name   = ls_h-sp_name1.
-  lt_parts = VALUE #( ( CONV string( ls_h-sp_street ) ) ( CONV string( ls_h-sp_str_supl1 ) )
-                      ( CONV string( ls_h-sp_city2 ) )
-                      ( condense( |{ ls_h-sp_post_code } { ls_h-sp_city1 }| ) )
-                      ( CONV string( ls_h-sp_country_tx ) ) ).
+  " Buyer: "Name, street, ..., country" -> name + address
+  SPLIT ls_h-buyer AT `,` INTO TABLE lt_parts.
+  READ TABLE lt_parts INTO lv_text INDEX 1.
+  cs_hdr-buy_name = condense( lv_text ).
+  DELETE lt_parts INDEX 1.
   PERFORM join USING lt_parts `, ` CHANGING cs_hdr-buy_address.
   cs_hdr-buy_tel    = ls_h-sp_telephone.
   cs_hdr-buy_mobile = ls_h-sp_mobile.
@@ -1567,14 +1564,7 @@ FORM labels.
     ( name = 'CNTY_ORGN'      text = 'Country of Origin of Goods' len = 15 )
     ( name = 'CNTY_DEST'      text = 'Country of Final Destination' len = 15 )
     ( name = 'SP_KUNNR'       text = 'Buyer (Sold-to)' len = 10 )
-    ( name = 'SP_NAME1'       text = 'Buyer Name' len = 25 )
-    ( name = 'SP_STREET'      text = 'Buyer Street' len = 25 )
-    ( name = 'SP_STR_SUPL1'   text = 'Buyer Street 2' len = 20 )
-    ( name = 'SP_CITY1'       text = 'Buyer City' len = 15 )
-    ( name = 'SP_CITY2'       text = 'Buyer District' len = 15 )
-    ( name = 'SP_POST_CODE'   text = 'Buyer Postal Code' len = 10 )
-    ( name = 'SP_COUNTRY'     text = 'Buyer Country' len = 6 )
-    ( name = 'SP_COUNTRY_TX'  text = 'Buyer Country Desc.' len = 15 )
+    ( name = 'BUYER'          text = 'Buyer Address' len = 50 )
     ( name = 'SP_EMAIL'       text = 'Buyer E-mail' len = 25 )
     ( name = 'SP_TELEPHONE'   text = 'Buyer Telephone' len = 15 )
     ( name = 'SP_MOBILE'      text = 'Buyer Mobile Number' len = 15 )
