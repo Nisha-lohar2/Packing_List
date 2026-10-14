@@ -49,16 +49,9 @@ TYPES:
     " Reference
     sales_orders  TYPE string,             " sales order of the row
     invoices      TYPE string,             " billing document of the row
-    " Header - Exporter (B3-B7)
-    exp_name1     TYPE adrc-name1,
-    exp_street    TYPE adrc-street,
-    exp_str_supl1 TYPE adrc-str_suppl1,
-    exp_city1     TYPE adrc-city1,
-    exp_post_code TYPE adrc-post_code1,
-    exp_region    TYPE adrc-region,
-    exp_region_tx TYPE t005u-bezei,
-    exp_country   TYPE land1,
-    exp_country_tx TYPE t005t-landx,
+    " Header - Exporter (B3-B5): name, street, street 2, city - postal
+    " code, region text, country text in ONE column, comma separated
+    exporter      TYPE string,
     gstin         TYPE j_1bbranch-gstin,
     cin           TYPE t001z-paval,
     " Header (B9-B17)
@@ -288,6 +281,7 @@ TYPES:
   BEGIN OF ty_label,
     name TYPE lvc_fname,
     text TYPE string,
+    len  TYPE lvc_outlen,              " column width in ALV / Excel
   END OF ty_label,
   ty_label_tab TYPE STANDARD TABLE OF ty_label WITH EMPTY KEY,
 
@@ -709,6 +703,9 @@ FORM invoice_header USING    is_bill  TYPE ty_bill
 
   DATA ls_party TYPE ty_party.
   DATA lv_ref   TYPE string.
+  DATA lv_reg   TYPE string.
+  DATA lv_cty   TYPE string.
+  DATA lt_parts TYPE ty_string_tab.
 
   CLEAR cs_out.
   lv_ref = |{ is_bill-vbeln ALPHA = OUT }|.
@@ -721,23 +718,25 @@ FORM invoice_header USING    is_bill  TYPE ty_bill
   ENDIF.
   READ TABLE gt_adrc INTO DATA(ls_adrc) WITH TABLE KEY addrnumber = ls_t001-adrnr.
   IF sy-subrc = 0.
-    cs_out-exp_name1     = ls_adrc-name1.
-    cs_out-exp_street    = ls_adrc-street.
-    cs_out-exp_str_supl1 = ls_adrc-str_suppl1.
-    cs_out-exp_city1     = ls_adrc-city1.
-    cs_out-exp_post_code = ls_adrc-post_code1.
-    cs_out-exp_region    = ls_adrc-region.
-    cs_out-exp_country   = ls_adrc-country.
-    cs_out-iec           = ls_adrc-building.                        " B11
+    cs_out-iec = ls_adrc-building.                                   " B11
     READ TABLE gt_t005u INTO DATA(ls_t005u)
          WITH TABLE KEY land1 = ls_adrc-country bland = ls_adrc-region.
     IF sy-subrc = 0.
-      cs_out-exp_region_tx = ls_t005u-bezei.                         " B4
+      lv_reg = ls_t005u-bezei.                                       " B4
     ENDIF.
     READ TABLE gt_t005t INTO DATA(ls_t005t) WITH TABLE KEY land1 = ls_adrc-country.
     IF sy-subrc = 0.
-      cs_out-exp_country_tx = ls_t005t-landx.                        " B5
+      lv_cty = ls_t005t-landx.                                       " B5
     ENDIF.
+    " B3: NAME1, STREET, STR_SUPPL1, CITY1 - POST_CODE1, region, country
+    lt_parts = VALUE #( ( CONV string( ls_adrc-name1 ) )
+                        ( CONV string( ls_adrc-street ) )
+                        ( CONV string( ls_adrc-str_suppl1 ) )
+                        ( condense( |{ ls_adrc-city1 } { COND string( WHEN ls_adrc-post_code1 IS NOT INITIAL
+                                                                        THEN |- { ls_adrc-post_code1 }| ) }| ) )
+                        ( lv_reg )
+                        ( lv_cty ) ).
+    PERFORM join USING lt_parts `, ` CHANGING cs_out-exporter.
   ELSE.
     APPEND VALUE #( type = 'W' ref = lv_ref
                     text = |Company code { is_bill-bukrs }: no address (T001 / ADRC)| ) TO gt_log.
@@ -940,7 +939,7 @@ FORM display.
       lo_alv->get_display_settings( )->set_list_header(
         'Export Packing List - fill the empty columns in Excel and upload the file to print' ).
       LOOP AT gt_labels INTO DATA(ls_label).
-        PERFORM column_text USING lo_alv ls_label-name ls_label-text.
+        PERFORM column_text USING lo_alv ls_label-name ls_label-text ls_label-len.
       ENDLOOP.
       lo_alv->display( ).
     CATCH cx_salv_error INTO lx_salv.
@@ -1280,15 +1279,12 @@ FORM form_header USING    it_rows TYPE ty_out_tab
   cs_hdr-np_count = lines( lt_np ).
   cs_hdr-format   = COND #( WHEN cs_hdr-np_count > 0 THEN 'N' ELSE 'O' ).
 
-  " Exporter
-  cs_hdr-exp_name  = ls_h-exp_name1.
-  cs_hdr-sign_for  = ls_h-exp_name1.
-  lt_parts = VALUE #( ( CONV string( ls_h-exp_street ) )
-                      ( CONV string( ls_h-exp_str_supl1 ) )
-                      ( condense( |{ ls_h-exp_city1 } { COND string( WHEN ls_h-exp_post_code IS NOT INITIAL
-                                                                       THEN |- { ls_h-exp_post_code }| ) }| ) )
-                      ( CONV string( ls_h-exp_region_tx ) )
-                      ( CONV string( ls_h-exp_country_tx ) ) ).
+  " Exporter: "Name, street, ..., country" -> name + address lines
+  SPLIT ls_h-exporter AT `,` INTO TABLE lt_parts.
+  READ TABLE lt_parts INTO lv_text INDEX 1.
+  cs_hdr-exp_name = condense( lv_text ).
+  cs_hdr-sign_for = cs_hdr-exp_name.
+  DELETE lt_parts INDEX 1.
   PERFORM join USING lt_parts lv_nl CHANGING cs_hdr-exp_address.
   cs_hdr-exp_gstin = ls_h-gstin.
   cs_hdr-exp_iec   = ls_h-iec.
@@ -1556,90 +1552,83 @@ ENDFORM.
 FORM labels.
 
   gt_labels = VALUE #(
-    ( name = 'SALES_ORDERS'   text = 'Sales Order' )
-    ( name = 'INVOICES'       text = 'SAP Invoice Number' )
-    ( name = 'EXP_NAME1'      text = 'Exporter Name' )
-    ( name = 'EXP_STREET'     text = 'Exporter Street' )
-    ( name = 'EXP_STR_SUPL1'  text = 'Exporter Street 2' )
-    ( name = 'EXP_CITY1'      text = 'Exporter City' )
-    ( name = 'EXP_POST_CODE'  text = 'Exporter Postal Code' )
-    ( name = 'EXP_REGION'     text = 'Exporter Region' )
-    ( name = 'EXP_REGION_TX'  text = 'Exporter Region Desc.' )
-    ( name = 'EXP_COUNTRY'    text = 'Exporter Country' )
-    ( name = 'EXP_COUNTRY_TX' text = 'Exporter Country Desc.' )
-    ( name = 'GSTIN'          text = 'GST No.' )
-    ( name = 'CIN'            text = 'CIN No.' )
-    ( name = 'PACKNO'         text = 'Packing List No.' )
-    ( name = 'PACKDT'         text = 'Packing List Date' )
-    ( name = 'IEC'            text = 'Exporter Ref. (IEC No.)' )
-    ( name = 'ORDER_NO'       text = 'Order No.' )
-    ( name = 'ORDER_DATE'     text = 'Order Date' )
-    ( name = 'BUYER_REF'      text = 'Buyer''s Reference No.' )
-    ( name = 'BUYER_REF_DT'   text = 'Buyer''s Reference Date' )
-    ( name = 'CNTY_ORGN'      text = 'Country of Origin of Goods' )
-    ( name = 'CNTY_DEST'      text = 'Country of Final Destination' )
-    ( name = 'SP_KUNNR'       text = 'Buyer (Sold-to)' )
-    ( name = 'SP_NAME1'       text = 'Buyer Name' )
-    ( name = 'SP_STREET'      text = 'Buyer Street' )
-    ( name = 'SP_STR_SUPL1'   text = 'Buyer Street 2' )
-    ( name = 'SP_CITY1'       text = 'Buyer City' )
-    ( name = 'SP_CITY2'       text = 'Buyer District' )
-    ( name = 'SP_POST_CODE'   text = 'Buyer Postal Code' )
-    ( name = 'SP_COUNTRY'     text = 'Buyer Country' )
-    ( name = 'SP_COUNTRY_TX'  text = 'Buyer Country Desc.' )
-    ( name = 'SP_EMAIL'       text = 'Buyer E-mail' )
-    ( name = 'SP_TELEPHONE'   text = 'Buyer Telephone' )
-    ( name = 'SP_MOBILE'      text = 'Buyer Mobile Number' )
-    ( name = 'SH_KUNNR'       text = 'Ship-to Party' )
-    ( name = 'SH_NAME1'       text = 'Ship-to Name' )
-    ( name = 'SH_STREET'      text = 'Ship-to Street' )
-    ( name = 'SH_STR_SUPL1'   text = 'Ship-to Street 2' )
-    ( name = 'SH_CITY1'       text = 'Ship-to City' )
-    ( name = 'SH_CITY2'       text = 'Ship-to District' )
-    ( name = 'SH_POST_CODE'   text = 'Ship-to Postal Code' )
-    ( name = 'SH_COUNTRY'     text = 'Ship-to Country' )
-    ( name = 'SH_COUNTRY_TX'  text = 'Ship-to Country Desc.' )
-    ( name = 'SH_EMAIL'       text = 'Ship-to E-mail' )
-    ( name = 'SH_TELEPHONE'   text = 'Ship-to Telephone' )
-    ( name = 'SH_MOBILE'      text = 'Ship-to Mobile Number' )
-    ( name = 'NP1'            text = 'Notifier Party 1' )
-    ( name = 'NP2'            text = 'Notifier Party 2' )
-    ( name = 'NP3'            text = 'Notifier Party 3' )
-    ( name = 'NP4'            text = 'Notifier Party 4' )
-    ( name = 'NP5'            text = 'Notifier Party 5' )
-    ( name = 'PRE_CARRIAGE'   text = 'Pre-Carriage' )
-    ( name = 'PLACE_RECEIPT'  text = 'Place of Receipt by Pre-carrier' )
-    ( name = 'VESSEL_FLIGHT'  text = 'Vessel / Flight No.' )
-    ( name = 'PORT_LOADING'   text = 'Port of Loading' )
-    ( name = 'PORT_DISCH'     text = 'Port of Discharge' )
-    ( name = 'PLACE_DELIV'    text = 'Place of Delivery' )
-    ( name = 'MARKS_NOS'      text = 'Marks & Nos.' )
-    ( name = 'CONTAINER_NO'   text = 'Container No.' )
-    ( name = 'NO_PACKAGES'    text = 'No. of Packages' )
-    ( name = 'GOODS_DESC'     text = 'Description of Goods' )
-    ( name = 'ZTERM'          text = 'Payment Term' )
-    ( name = 'PAYMENT_TERM'   text = 'Payment Term Desc.' )
-    ( name = 'INCO1'          text = 'Incoterms' )
-    ( name = 'INCO2'          text = 'Incoterms Location' )
-    ( name = 'SN'             text = 'Sl.No.' )
-    ( name = 'INV_SN'         text = 'Sr.No. INV' )
-    ( name = 'ARTICLE_NO'     text = 'Article No.' )
-    ( name = 'STD'            text = 'STD' )
-    ( name = 'ARTICLES'       text = 'Articles' )
-    ( name = 'TOTAL_ART'      text = 'Total Articles' )
-    ( name = 'PART_NO'        text = 'Part No.' )
-    ( name = 'PROD_DESC'      text = 'Product Description' )
-    ( name = 'QUANTITY'       text = 'Quantity Pcs' )
-    ( name = 'GROSS_WT'       text = 'Gross Wt. KGS' )
-    ( name = 'NET_WT'         text = 'Net Wt. KGS' )
-    ( name = 'HSN'            text = 'H.S Code' )
-    ( name = 'DECLARATION'    text = 'Declaration' ) ).
+    ( name = 'SALES_ORDERS'   text = 'Sales Order' len = 12 )
+    ( name = 'INVOICES'       text = 'SAP Invoice Number' len = 12 )
+    ( name = 'EXPORTER'       text = 'Exporter Address' len = 50 )
+    ( name = 'GSTIN'          text = 'GST No.' len = 16 )
+    ( name = 'CIN'            text = 'CIN No.' len = 22 )
+    ( name = 'PACKNO'         text = 'Packing List No.' len = 12 )
+    ( name = 'PACKDT'         text = 'Packing List Date' len = 10 )
+    ( name = 'IEC'            text = 'Exporter Ref. (IEC No.)' len = 12 )
+    ( name = 'ORDER_NO'       text = 'Order No.' len = 20 )
+    ( name = 'ORDER_DATE'     text = 'Order Date' len = 10 )
+    ( name = 'BUYER_REF'      text = 'Buyer''s Reference No.' len = 25 )
+    ( name = 'BUYER_REF_DT'   text = 'Buyer''s Reference Date' len = 10 )
+    ( name = 'CNTY_ORGN'      text = 'Country of Origin of Goods' len = 15 )
+    ( name = 'CNTY_DEST'      text = 'Country of Final Destination' len = 15 )
+    ( name = 'SP_KUNNR'       text = 'Buyer (Sold-to)' len = 10 )
+    ( name = 'SP_NAME1'       text = 'Buyer Name' len = 25 )
+    ( name = 'SP_STREET'      text = 'Buyer Street' len = 25 )
+    ( name = 'SP_STR_SUPL1'   text = 'Buyer Street 2' len = 20 )
+    ( name = 'SP_CITY1'       text = 'Buyer City' len = 15 )
+    ( name = 'SP_CITY2'       text = 'Buyer District' len = 15 )
+    ( name = 'SP_POST_CODE'   text = 'Buyer Postal Code' len = 10 )
+    ( name = 'SP_COUNTRY'     text = 'Buyer Country' len = 6 )
+    ( name = 'SP_COUNTRY_TX'  text = 'Buyer Country Desc.' len = 15 )
+    ( name = 'SP_EMAIL'       text = 'Buyer E-mail' len = 25 )
+    ( name = 'SP_TELEPHONE'   text = 'Buyer Telephone' len = 15 )
+    ( name = 'SP_MOBILE'      text = 'Buyer Mobile Number' len = 15 )
+    ( name = 'SH_KUNNR'       text = 'Ship-to Party' len = 10 )
+    ( name = 'SH_NAME1'       text = 'Ship-to Name' len = 25 )
+    ( name = 'SH_STREET'      text = 'Ship-to Street' len = 25 )
+    ( name = 'SH_STR_SUPL1'   text = 'Ship-to Street 2' len = 20 )
+    ( name = 'SH_CITY1'       text = 'Ship-to City' len = 15 )
+    ( name = 'SH_CITY2'       text = 'Ship-to District' len = 15 )
+    ( name = 'SH_POST_CODE'   text = 'Ship-to Postal Code' len = 10 )
+    ( name = 'SH_COUNTRY'     text = 'Ship-to Country' len = 6 )
+    ( name = 'SH_COUNTRY_TX'  text = 'Ship-to Country Desc.' len = 15 )
+    ( name = 'SH_EMAIL'       text = 'Ship-to E-mail' len = 25 )
+    ( name = 'SH_TELEPHONE'   text = 'Ship-to Telephone' len = 15 )
+    ( name = 'SH_MOBILE'      text = 'Ship-to Mobile Number' len = 15 )
+    ( name = 'NP1'            text = 'Notifier Party 1' len = 30 )
+    ( name = 'NP2'            text = 'Notifier Party 2' len = 30 )
+    ( name = 'NP3'            text = 'Notifier Party 3' len = 30 )
+    ( name = 'NP4'            text = 'Notifier Party 4' len = 30 )
+    ( name = 'NP5'            text = 'Notifier Party 5' len = 30 )
+    ( name = 'PRE_CARRIAGE'   text = 'Pre-Carriage' len = 15 )
+    ( name = 'PLACE_RECEIPT'  text = 'Place of Receipt by Pre-carrier' len = 20 )
+    ( name = 'VESSEL_FLIGHT'  text = 'Vessel / Flight No.' len = 15 )
+    ( name = 'PORT_LOADING'   text = 'Port of Loading' len = 20 )
+    ( name = 'PORT_DISCH'     text = 'Port of Discharge' len = 20 )
+    ( name = 'PLACE_DELIV'    text = 'Place of Delivery' len = 20 )
+    ( name = 'MARKS_NOS'      text = 'Marks & Nos.' len = 15 )
+    ( name = 'CONTAINER_NO'   text = 'Container No.' len = 25 )
+    ( name = 'NO_PACKAGES'    text = 'No. of Packages' len = 12 )
+    ( name = 'GOODS_DESC'     text = 'Description of Goods' len = 40 )
+    ( name = 'ZTERM'          text = 'Payment Term' len = 6 )
+    ( name = 'PAYMENT_TERM'   text = 'Payment Term Desc.' len = 25 )
+    ( name = 'INCO1'          text = 'Incoterms' len = 6 )
+    ( name = 'INCO2'          text = 'Incoterms Location' len = 15 )
+    ( name = 'SN'             text = 'Sl.No.' len = 6 )
+    ( name = 'INV_SN'         text = 'Sr.No. INV' len = 6 )
+    ( name = 'ARTICLE_NO'     text = 'Article No.' len = 12 )
+    ( name = 'STD'            text = 'STD' len = 6 )
+    ( name = 'ARTICLES'       text = 'Articles' len = 8 )
+    ( name = 'TOTAL_ART'      text = 'Total Articles' len = 8 )
+    ( name = 'PART_NO'        text = 'Part No.' len = 18 )
+    ( name = 'PROD_DESC'      text = 'Product Description' len = 30 )
+    ( name = 'QUANTITY'       text = 'Quantity Pcs' len = 12 )
+    ( name = 'GROSS_WT'       text = 'Gross Wt. KGS' len = 12 )
+    ( name = 'NET_WT'         text = 'Net Wt. KGS' len = 12 )
+    ( name = 'HSN'            text = 'H.S Code' len = 10 )
+    ( name = 'DECLARATION'    text = 'Declaration' len = 40 ) ).
 
 ENDFORM.
 
 FORM column_text USING io_alv  TYPE REF TO cl_salv_table
                        iv_name TYPE csequence
-                       iv_text TYPE csequence.
+                       iv_text TYPE csequence
+                       iv_len  TYPE lvc_outlen.
 
   DATA lo_column TYPE REF TO cl_salv_column.
   DATA lv_name   TYPE lvc_fname.
@@ -1656,7 +1645,8 @@ FORM column_text USING io_alv  TYPE REF TO cl_salv_table
       lo_column->set_long_text( lv_long ).
       lo_column->set_medium_text( lv_medium ).
       lo_column->set_short_text( lv_short ).
-      lo_column->set_output_length( 20 ).          " visible also when empty
+      " Fixed width: visible also when empty, reasonable in the Excel export
+      lo_column->set_output_length( iv_len ).
     CATCH cx_salv_not_found.
       RETURN.
   ENDTRY.
@@ -1668,8 +1658,11 @@ ENDFORM.
 *&---------------------------------------------------------------------*
 FORM show_log.
 
-  DATA lo_log  TYPE REF TO cl_salv_table.
-  DATA lx_salv TYPE REF TO cx_salv_error.
+  DATA lo_log     TYPE REF TO cl_salv_table.
+  DATA lx_salv    TYPE REF TO cx_salv_error.
+  DATA lv_len_4   TYPE lvc_outlen VALUE 4.
+  DATA lv_len_20  TYPE lvc_outlen VALUE 20.
+  DATA lv_len_100 TYPE lvc_outlen VALUE 100.
 
   IF gt_log IS INITIAL.
     RETURN.
@@ -1680,10 +1673,9 @@ FORM show_log.
                               CHANGING  t_table      = gt_log ).
       lo_log->set_screen_popup( start_column = 5  end_column = 150
                                 start_line   = 3  end_line   = 20 ).
-      lo_log->get_columns( )->set_optimize( abap_true ).
-      PERFORM column_text USING lo_log 'TYPE' 'Type'.
-      PERFORM column_text USING lo_log 'REF'  'Reference'.
-      PERFORM column_text USING lo_log 'TEXT' 'Message'.
+      PERFORM column_text USING lo_log 'TYPE' 'Type'      lv_len_4.
+      PERFORM column_text USING lo_log 'REF'  'Reference' lv_len_20.
+      PERFORM column_text USING lo_log 'TEXT' 'Message'   lv_len_100.
       lo_log->display( ).
     CATCH cx_salv_error INTO lx_salv.
       MESSAGE lx_salv TYPE 'S' DISPLAY LIKE 'E'.

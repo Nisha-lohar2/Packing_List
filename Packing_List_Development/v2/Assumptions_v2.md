@@ -26,7 +26,7 @@ one of them must be filled. File filled → step 4, otherwise step 1.
 | Link | Implemented as | Logic |
 |---|---|---|
 | Sales order → billing documents | `VBRP-AUBEL IN S_VBELN`, joined to `VBRK` | B13 uses AUBEL |
-| Exporter | `VBRK-BUKRS` → `T001-ADRNR` → `ADRC` | B3 |
+| Exporter | `VBRK-BUKRS` → `T001-ADRNR` → `ADRC`; **one column "Exporter Address"**: name, street, street 2, city - postal code, region text, country text, separated by commas | B3 – B5 |
 | GST No. | `J_1BBRANCH-GSTIN` for `BUKRS` + `BRANCH` = `VBRK-BUPLA` | B6 |
 | CIN | `T001Z-PAVAL`, `PARTY` = `ZCIN` | B7 |
 | IEC | `ADRC-BUILDING` of the company address | B11 |
@@ -58,6 +58,8 @@ one of them must be filled. File filled → step 4, otherwise step 1.
 | A14 | Form totals: quantity, gross and net weight = sums of the packing list rows. | Totals row of the sample PDFs |
 | A15 | Form rows: an HSN heading row whenever the HSN changes; an empty Articles / weight cell belongs to the package above (merged cell on the samples). | Sample PDFs |
 | A16 | Form output: print preview on device `LP01` (constant `GC_DEST`). | Decision of 12.10. |
+| A17 | Exporter address in one column, comma separated. On the form the part before the first comma is the exporter name, the rest are the address lines. | User request 14.10. |
+| A18 | Every ALV column has a fixed width (6 – 50 characters, by content) so the Excel export has reasonable column sizes and empty columns stay visible. | User request 14.10. |
 
 ## 4. Error handling
 
