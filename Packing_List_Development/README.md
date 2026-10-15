@@ -5,6 +5,12 @@ annexures stay in the repository root, unchanged:
 `Object ID- 102(B)Export consolidated packing list.docx`, `Logic_sheet1.xlsx`,
 `Z table Format1.xlsx` and the two sample PDFs.
 
+## Current version: `v3/` (revised requirement, two reports)
+
+`v3/README.md` — report 1 `ZSD_EPACK_EXTRACT` (sales orders → editable ALV → Excel in the Z-table format),
+report 2 `ZSD_EPACK_UPLOAD` (upload → validation → `ZSD_EPACK_DATA` → Smart Form), DDIC, mappings,
+open questions, test cases, activation steps. The folders below are earlier versions.
+
 ## Contents
 
 | Folder / file | What it is |
